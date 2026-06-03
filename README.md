@@ -1,8 +1,8 @@
 <h1 align="center">Next-Generation-Fetch</h1>
 
 <div style="display: flex; justify-content: center; gap: 10px;">
-    <img src="docs/icon.png" width="300" height="400">
-    <img src="docs/5minScan.png" width="400" height="400">
+    <img src="docs/icon.png" width="360" height="400">
+    <img src="docs/5minScan.png" width="360" height="400">
 </div>
 <p align="center">
 An enterprise-grade, OpSec-aware proxy harvesting and validation suite designed for security professionals and researchers. Unlike traditional fetchers, NGF focuses on stealth pivoting, TLS impersonation, and **persistent state** to provide a high-quality, reliable list of proxies suitable for tools like `proxychains`
