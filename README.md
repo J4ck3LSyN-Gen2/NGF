@@ -10,7 +10,9 @@
   <img src="docs/5minScan.png" height="400" style="margin: 0 10px; border-radius: 8px;">
 </div>
 <p align="center">
-An enterprise-grade, OpSec-aware proxy harvesting and validation suite designed for security professionals and researchers. Unlike traditional fetchers, NGF focuses on stealth pivoting, TLS impersonation, and **persistent state** to provide a high-quality, reliable list of proxies suitable for tools like `proxychains`
+  Unlike traditional fetchers, NGF focuses on <strong>stealth pivoting</strong>, <strong>TLS impersonation</strong>, and 
+  <strong>persistent state</strong> to provide a high-quality, reliable list of proxies suitable for tools like 
+  <code>proxychains</code>.
 </p>
 
 ---
