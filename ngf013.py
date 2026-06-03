@@ -1,37 +1,5 @@
 #!/usr/bin/env python3
-"""
-Next-Generation Proxy Fetcher & Validator (NGF) - v0.1.3
-Enterprise-grade, OpSec-aware proxy harvester with persistent state, TLS impersonation, and stealth pivoting.
-
-Core Architecture:
-1. Persistent State: Uses a local SQLite database (WAL mode) to store proxy metadata. This prevents
-   redundant scanning of known-dead proxies and allows for fast "seeding" of new runs.
-2. OpSec / Pivot Mechanism:
-   - When --opsec or --proxy-only is enabled, the tool performs a "Phase 0" to find a stable 'pivot' proxy.
-   - All subsequent discovery (fetching lists) and metadata audits (geo-IP lookups) are routed through
-     this pivot, ensuring the host's real IP never touches proxy-related APIs or 3rd party lists.
-3. TLS Impersonation: Leverages curl_cffi to impersonate Chrome 110, significantly reducing the
-   likelihood of being blocked by CDN-level anti-bot measures (like Cloudflare/Akamai).
-4. Asynchronous Pipeline: Uses Python TaskGroups and semaphores for high-concurrency validation.
-
-Usage:
-    Standard: python3 ngf013.py --limit 100 --type socks5
-    Stealth:   python3 ngf013.py --opsec --pivot-http --country US,DE
-    Database:  python3 ngf013.py --db-count --db-dump --db-country US
-"""
-
-__version__ = "0.1.3"
-__author__ = "J4ck3LSyN (Improved by Grok)"
-
-import asyncio
-import argparse
-import json
-import logging
-import random
-import re
-import sys
-import signal
-import time
+import asyncio, argparse, json, logging, random, re, sys, signal, time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -42,6 +10,11 @@ from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn, TimeElapsedColumn
 from rich.logging import RichHandler
 from rich.table import Table
+
+__version__ = "0.1.3"
+__author__ = "J4ck3LSyN"
+__license__ = "MIT"
+
 
 # ===================== CONFIG =====================
 DEFAULT_TIMEOUT = 10
