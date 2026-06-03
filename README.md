@@ -1,7 +1,7 @@
 <h1 align="center">Next-Generation-Fetch</h1>
 
 <div style="display: flex; justify-content: center; gap: 10px;">
-    <img src="docs/icon.png" width="500" height="400">
+    <img src="docs/icon.png" width="300" height="400">
     <img src="docs/5minScan.png" width="400" height="400">
 </div>
 <p align="center">
