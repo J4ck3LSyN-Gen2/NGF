@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-import asyncio, argparse, json, logging, random, re, sys, signal, time
+import asyncio, argparse, json, logging, os, random, re, sys, signal, time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 
 import aiosqlite
 from curl_cffi import requests
@@ -12,9 +12,8 @@ from rich.logging import RichHandler
 from rich.table import Table
 
 __version__ = "0.1.3"
-__author__ = "J4ck3LSyN"
+__author__ = "J4ck3LSyN (Improved by Grok)"
 __license__ = "MIT"
-
 
 # ===================== CONFIG =====================
 DEFAULT_TIMEOUT = 10
@@ -125,8 +124,19 @@ class ProxyDB:
 
     async def init(self):
         """Initializes the database schema and sets performance PRAGMAs."""
-        logger.debug(f"Initializing database at {self.path}")
-        self.db = await aiosqlite.connect(self.path)
+        db_path = Path(self.path).resolve()
+        logger.debug(f"Initializing database at {db_path}")
+
+        # Verify write permissions for the database directory
+        if not os.access(db_path.parent, os.W_OK):
+            logger.critical(f"Permission denied: Directory '{db_path.parent}' is not writable. Database cannot be initialized.")
+            sys.exit(1)
+
+        try:
+            self.db = await aiosqlite.connect(str(db_path))
+        except Exception as e:
+            logger.critical(f"Fatal error: Unable to open database file at {db_path}: {e}")
+            sys.exit(1)
 
         # Stability PRAGMAs should be set BEFORE the first write attempt.
         # This helps avoid 'disk I/O error' on filesystems with locking issues (WSL/NFS).
@@ -845,8 +855,11 @@ tcp_connect_time_out 8000
         for p in export_list[:chain_len]:
             config += f"{p.proto} {p.ip} {p.port}\n"
 
-        Path(self.args.output).write_text(config)
-        logger.info(f"Saved {len(self.working)} working proxies to {self.args.output}")
+        try:
+            Path(self.args.output).write_text(config)
+            logger.info(f"Saved {len(self.working)} working proxies to {self.args.output}")
+        except PermissionError:
+            logger.error(f"Permission denied: Could not write proxychains config to {self.args.output}")
 
         # JSON Export
         if self.args.json or self.args.update_json or self.args.validate_json:
@@ -856,8 +869,11 @@ tcp_connect_time_out 8000
                 "version": __version__,
                 "proxies": [p.to_dict() for p in export_list[:chain_len]]
             }
-            Path(path).write_text(json.dumps(export, indent=2))
-            logger.info(f"Metadata exported to {path}")
+            try:
+                Path(path).write_text(json.dumps(export, indent=2))
+                logger.info(f"Metadata exported to {path}")
+            except PermissionError:
+                logger.error(f"Permission denied: Could not write JSON metadata to {path}")
 
 
 async def main():
