@@ -1,0 +1,36 @@
+# ==================== NGF Tor Configuration ====================
+
+# Local SOCKS5 Proxy for the application
+SocksPort 127.0.0.1:9050
+SocksPolicy accept 127.0.0.1
+
+# Data directory
+DataDirectory /home/ngfuser/.tor
+
+# Logging
+Log notice file /home/ngfuser/.tor/tor.log
+LogTimeGranularity 1
+
+# ==================== Bridging Configuration ====================
+
+UseBridges 1
+ClientTransportPlugin obfs4 exec /usr/bin/obfs4proxy
+UpdateBridgesFromAuthority 1
+
+# ==================== Bridge Lines (MUST start with "Bridge") ====================
+
+# Current working bridges (June 2026) - Replace regularly
+Bridge obfs4 31.223.90.226:9443 09D2A5493F85AFC928149B9F8A2640AA7A487727 cert=S/SgXjIoh4U/iniY7I94h3FzO+ECzFt7WAAaWoi7SyNncDH4V+/uWwS7Meurm+xxKhemYQ iat-mode=0
+
+Bridge obfs4 74.15.219.123:8080 5C06CF9CBD395D3A077544FBBCE865E7F12EC5B0 cert=bkkxeUSyiwNnLWA5EPeL107LV+T78hixjrDI3xrn8m3PUybaElGiGLbjVFOb4lTpnB2ocg iat-mode=0
+
+Bridge obfs4 185.177.207.13:22662 928C1E4289A01F34C8FB423FC32C0E77EE0F8736 cert=p9L6+25s8bnfkye1ZxFeAE4mAGY7DH4Gaj7dxngIIzP9BtqrHHwZXdjMK0RVIQ34C7aqZw iat-mode=2
+
+Bridge obfs4 130.61.54.81:13806 26EACB87E6546BD50B38B8167AEC102ED2452790 cert=F7zpvlKtSDmTN+T3hehAeyfKMJAh7ksQgl2I2uBShxBDMyeyGp+Rao3J8r+ybiUm2XRoOw iat-mode=0
+
+# Add more here (recommended 4–8 total)
+
+# ==================== Performance Tweaks ====================
+
+AvoidDiskWrites 1
+NumEntryGuards 3
