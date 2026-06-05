@@ -13,7 +13,7 @@ from rich.logging import RichHandler
 from rich.table import Table
 
 __version__ = "0.1.4"
-__author__ = "J4ck3LSyN (Improved by Grok)"
+__author__ = "J4ck3LSyN"
 __license__ = "MIT"
 
 # ===================== CONFIG =====================
