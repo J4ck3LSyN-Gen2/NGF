@@ -328,8 +328,8 @@ NGF's OpSec architecture is divided into three distinct phases:
 ```
 
 <div align="center">
-  <img src="docs/dumpExample.png" height="300" style="margin: 0 10px; border-radius: 8px;">
-  <img src="docs/pivotExample.png" height="300" style="margin: 0 10px; border-radius: 8px;">
+  <img src="docs/dumpExample.png" height="200" style="margin: 0 10px; border-radius: 8px;">
+  <img src="docs/pivotExample.png" height="200" style="margin: 0 10px; border-radius: 8px;">
 </div>
 
 ---
