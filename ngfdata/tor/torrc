@@ -5,10 +5,10 @@ SocksPort 127.0.0.1:9050
 SocksPolicy accept 127.0.0.1
 
 # Data directory
-DataDirectory /home/ngfuser/.tor
+DataDirectory /home/ngf/.tor
 
 # Logging
-Log notice file /home/ngfuser/.tor/tor.log
+Log notice file /home/ngf/.tor/tor.log
 LogTimeGranularity 1
 
 # ==================== Bridging Configuration ====================
