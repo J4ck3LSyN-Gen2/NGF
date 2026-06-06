@@ -18,7 +18,7 @@
 ---
 
 <p align="center">
-Author : J4ck3LSyN | Version: 0.1.4 | License: MIT | Authority: Chaos Foundry Security Division
+Author : J4ck3LSyN | Version: 0.1.5 | License: MIT | Authority: Chaos Foundry Security Division
 </p>
 
 ---
@@ -36,7 +36,7 @@ Author : J4ck3LSyN | Version: 0.1.4 | License: MIT | Authority: Chaos Foundry Se
   - [OpSec and Pivot](#opsec-and-pivot)
 - [Working with the Database](#working-with-the-database)
 - [Proper Workflow](#proper-workflow)
-- [Advanced Technical Notes (v0.1.4)](#advanced-technical-notes-v014)
+- [Advanced Technical Notes (v0.1.5)](#advanced-technical-notes-v015)
 - [Operational Security (OpSec) Logic](#operational-security-opsec-logic)
 - [Disclaimer](#disclaimer)
 
@@ -51,12 +51,6 @@ Author : J4ck3LSyN | Version: 0.1.4 | License: MIT | Authority: Chaos Foundry Se
     *   **Remote DNS (SOCKS5h):** Automatically utilizes `socks5h` for SOCKS5 proxies to ensure DNS resolution happens at the proxy level, preventing local DNS leaks.
     *   **DNS Leak Protection:** Detects if a proxy's DNS resolver matches the host country, signaling a potential identity leak.
     *   **Geo-IP Enrichment:** ISP, ASN, City, and Country code attribution.
-
-## Techincal Changes
-
-1. Some `database` args.
-2. Preparation for `docker` containerization in hopes to enable `bridged tor` connections.
-3. Small upgrades towards `0.1.5` were I plan to use `github` and possible other hosts like `jackalsyn.com` & `chaosfoundry.digital` to host a sharable `json` index to create a `mutual` and `constantly updating` database.
 
 ---
 
@@ -112,70 +106,70 @@ winget install proxychains-ng # Or proxychains4?
 * **Threading**
     This configured the number of concurrent validation workers, note that when using `--opsec` the `pivot` will still work on each indivitual threads. 
     > On initial discoveries without `--opsec` it is recommended to use `<8` threads, the metadata services can & will rate-limit you.
-    - _Usage: `python3 ngf014.py --threads <int> ...`_
+    - _Usage: `python3 ngf015.py --threads <int> ...`_
 
 * **Limits**
     Limit the validation after finding `x` amount.
-    - _Usage: `python3 ngf014.py --limit <int> ...`_
+    - _Usage: `python3 ngf015.py --limit <int> ...`_
 
 * **Types**
     List of proxy protocols to harvest and validation.
     > _Note:_ The default is `socks5`
-    - _Usage: `python3 ngf014.py --type <http,https,socks4,socks5> ...`_
+    - _Usage: `python3 ngf015.py --type <http,https,socks4,socks5> ...`_
 
 * **Verbosity**
     Configured debugging.
     > This nutralizes the `progress bar`, however the amount of information is needed when testing.
-    - _Usage: `python3 ngf014.py --verbose ...`_
+    - _Usage: `python3 ngf015.py --verbose ...`_
 
 * **Output**
     Control the `proxychains.conf` output.
     > This is intended to be used inside of `docker` containers where `proxychains` is needed (CAID.php), dropping to `/tmp` specifically.
-    - _`python3 ngf014.py --o </my/file/path/proxychains.conf> ...`_
+    - _`python3 ngf015.py --o </my/file/path/proxychains.conf> ...`_
     
 * **Examples**
-    - `python3 ngf014.py --verbose --limit 100 --threads 10 --type http`
-    - `python3 ngf014.py --limit 20 --threads 3 --type socks4,socks5`
+    - `python3 ngf015.py --verbose --limit 100 --threads 10 --type http`
+    - `python3 ngf015.py --limit 20 --threads 3 --type socks4,socks5`
 
 ### Proxychains Configuration
 * **The Different Chain Typess**
     After validation processes, this is used to set the chain type inside of the `proxychains.conf`.
-    - _Usage: `python3 ngf014.py ... --chain-type <0,1,2> ...`_
+    - _Usage: `python3 ngf015.py ... --chain-type <0,1,2> ...`_
     - __1__ : Dynamic
     - __2__ : Random
     - __3__ : Strict
 
 * **Chain Lengths**
     This tells `proxychains` how many `proxies` we wish to `chain` together, IE: if `2` than it will look something like: `<host> -> <proxy1> -> <proxy2> -> ...`.
-    - _Usage: `python3 ngf014.py ... --chain-length <int> ...`_
+    - _Usage: `python3 ngf015.py ... --chain-length <int> ...`_
     - _Note:_ It is wise to not use long chains unless you have already established more than the same amoount in verified proxies.
 
 * **Chain Latency**
     Only use proxies with a specified latency.
-    - _`python3 ngf014.py ... --chain-min-latency <float> ...`_
+    - _`python3 ngf015.py ... --chain-min-latency <float> ...`_
 
 * **Chain Randomization**
     Randomizes the output order in `proxychains.conf`
-    - _`python3 ngf014.py ... --chain-shuffle ...`_
+    - _`python3 ngf015.py ... --chain-shuffle ...`_
 
 * **Minimum Latency**
     Configure a minimum latency.
-    - _`python3 ngf014.py ... --min-latency <float> ...`_
+    - _`python3 ngf015.py ... --min-latency <float> ...`_
 
 ### JSON Files
 We save `metadata` reports inside of `JSON` for easy sharing and access, this is conceptual and planned to be used as a simpler method of proxy indexing without the sourcing of tens of thousands indivitually.
 
 * **--json**
     Set path for the report
-    - _`python3 ngf014.py ... --json <path> ...`_
+    - _`python3 ngf015.py ... --json <path> ...`_
 
 * **--update-json**
     Re-validates proxies from an existing file and update the metadata.
-    - _`python3 ngf014.py ... --update-json <path> ...`_
+    - _`python3 ngf015.py ... --update-json <path> ...`_
 
 * **--validate-json**
     Validates procies from a JSON file without new discovery.
-    - _`python3 ngf014.py ... --validate-json <path> ...`_
+    - _`python3 ngf015.py ... --validate-json <path> ...`_
 
 
 ### Sources
@@ -183,39 +177,39 @@ Most sources are internal, however they can be sourced via JSON or `--source`
 
 * **Update Sources**
     Force a refresh of canidates from external URLs.
-    - _`python3 ngf014.py --update-sources ...`_
+    - _`python3 ngf015.py --update-sources ...`_
 
 * **Unique Source**
     Use a custom source, seperated via `,`.
-    - _`python3 ngf014.py --source <url,url> ...`_
+    - _`python3 ngf015.py --source <url,url> ...`_
 
 * **Skipping the Dead**
     Skip ALL proxies that are found dead in the database.
-    - _`python3 ngf014.py --skip-dead ...`_
+    - _`python3 ngf015.py --skip-dead ...`_
 
 ### OpSec and Pivot
 This is where the tool shines, we will `route` discovery and `metadata audits` through a `pivot proxy`. This prevents massive amounts of `quries` to third-party sources from the `host` itself.
 
 * **Unique Pivot**
     Specify a unqiue pivot, IE: Tor.
-    - _`python3 ngf014.py ... --pivot http://127.0.0.1:9050 ...`_
+    - _`python3 ngf015.py ... --pivot http://127.0.0.1:9050 ...`_
 
 * **HTTP Pivoting**
     Forces the pivot the search and prioritiize `HTTP/HTTPS` proxies, this assists in making sure the `third parties` do not flag us instantly.
-    - _`python3 ngf014.py ... --pivot-http ...`_
+    - _`python3 ngf015.py ... --pivot-http ...`_
 
 * **Limiting the Pivot**
     Number of uses allowed per-pivot before rotating.
     > _Note:_ It is recommended to gain a decent 50+ validated list prior to implementing this at scale.
-    - _`python3 ngf014.py ... --pivot-limit <int> ...`_
+    - _`python3 ngf015.py ... --pivot-limit <int> ...`_
 
 * **OpSec**
     This enables `stealth-mode` where we will route `discovery` and `metadata audits` through a `pivot-proxy`, shown above.
-    - _`python3 ngf014.py ... ... --opsec`_
+    - _`python3 ngf015.py ... ... --opsec`_
 
 * **Proxy Only**
     This forces ALL traffic (including discovery) through a picot, masking the host IP entirely.
-    - _`python3 ngf014.py ... ... --proxy-only`_
+    - _`python3 ngf015.py ... ... --proxy-only`_
 
 ### Working with the Database
 NGF utilizes a persistent SQLite engine to maintain a "Long-Term Memory" of the proxy landscape. Unlike volatile fetchers that lose data on exit, NGF tracks every proxy's historical performance, protocol details, and geographic metadata.
@@ -231,44 +225,44 @@ NGF utilizes a persistent SQLite engine to maintain a "Long-Term Memory" of the 
 
 * **Dumping the Database**
     Dumps information from the database.
-    - _`python3 ngf014.py --db-dump`_
+    - _`python3 ngf015.py --db-dump`_
 
 * **Getting the Numbers**
     Show the statistics.
-    - _`python3 ngf014.py --db-count`_
+    - _`python3 ngf015.py --db-count`_
 
 * **Filtering**
-    - _`python3 ngf014.py --db-ip <ip>`_
-    - _`python3 ngf014.py --db-country <country>`_
-    - _`python3 ngf014.py --db-proto <http,https,socks4,socks5>`_
-    - _`python3 ngf014.py --db-max-latency <float>`_
-    - _`python3 ngf014.py --db-anonymity <elite,anonymous,transparent>`_
-    - _`python3 ngf014.py --db-source <url,url>`_
+    - _`python3 ngf015.py --db-ip <ip>`_
+    - _`python3 ngf015.py --db-country <country>`_
+    - _`python3 ngf015.py --db-proto <http,https,socks4,socks5>`_
+    - _`python3 ngf015.py --db-max-latency <float>`_
+    - _`python3 ngf015.py --db-anonymity <elite,anonymous,transparent>`_
+    - _`python3 ngf015.py --db-source <url,url>`_
 
     These can also be combined:
-    *   **By IP:** `python3 ngf014.py --db-dump --db-ip 1.2.3.4`
-    *   **By Geography:** `python3 ngf014.py --db-dump --db-country US`
-    *   **By Protocol:** `python3 ngf014.py --db-dump --db-proto socks5`
-    *   **By Latency:** `python3 ngf014.py --db-dump --db-max-latency 1.5`
-    *   **By Anonymity:** `python3 ngf014.py --db-dump --db-anonymity Elite`
-    *   **By Source:** `python3 ngf014.py --db-dump --db-source github`
+    *   **By IP:** `python3 ngf015.py --db-dump --db-ip 1.2.3.4`
+    *   **By Geography:** `python3 ngf015.py --db-dump --db-country US`
+    *   **By Protocol:** `python3 ngf015.py --db-dump --db-proto socks5`
+    *   **By Latency:** `python3 ngf015.py --db-dump --db-max-latency 1.5`
+    *   **By Anonymity:** `python3 ngf015.py --db-dump --db-anonymity Elite`
+    *   **By Source:** `python3 ngf015.py --db-dump --db-source github`
     
 * **Importing & Exporting**
     These operations are extensions to `json` handling.
-    - _`python3 ngf014.py --db-import <path>`:Import a `index.json`_
-    - _`python3 ngf014.py --db-json <path>`:Export a `index.json`_
+    - _`python3 ngf015.py --db-import <path>`:Import a `index.json`_
+    - _`python3 ngf015.py --db-json <path>`:Export a `index.json`_
 
 * **Clearing**
     Wipe ALL data from the database.
-    - _`python3 ngf014.py --db-clear`_
+    - _`python3 ngf015.py --db-clear`_
 
 ## Proper Workflow
 
-1. **Warn up the database:** `python3 ngf014.py --limit 28 --threads 4 --type http --update-sources --chain-type 0 --chain-length 2`
-2. **Initialize the pivot:** `python3 ngf014.py --limit 256 --threads 16 --type http,socks4,socks5 --json current.json --pivot-http --opsec`
+1. **Warn up the database:** `python3 ngf015.py --limit 28 --threads 4 --type http --update-sources --chain-type 0 --chain-length 2`
+2. **Initialize the pivot:** `python3 ngf015.py --limit 256 --threads 16 --type http,socks4,socks5 --json current.json --pivot-http --opsec`
 
 
-## Advanced Technical Notes (v0.1.4)
+## Advanced Technical Notes (v0.1.5)
 
 > _Note:_ The `database` is used for storing proxies that are `dead` or `pending-validation` along side the `working` ones, you can filter these using `--db-max-latency 7.0` usually resolving only working proxies. Reasoning: most `dead` proxies are never are able to connect resulting in a `null`, the ones that did `connect` but `failed` validation after will usually be `>8.0`.  
 
@@ -278,21 +272,21 @@ NGF utilizes a persistent SQLite engine to maintain a "Long-Term Memory" of the 
 
 
 ### Database Optimizations
-NGF doesn't just store data; it optimizes for speed. In `ngf014.py`, the `ProxyDB` class implements:
+NGF doesn't just store data; it optimizes for speed. In `ngf015.py`, the `ProxyDB` class implements:
 *   **PRAGMA busy_timeout = 5000**: Handles database locks gracefully during high-concurrency writes.
 *   **PRAGMA synchronous = NORMAL**: Balances safety and speed.
 *   **Batch Upserting**: Discovered candidates are inserted in bulk to minimize disk I/O overhead.
 
 ### Error Handling & Resilience
-The validator in `ngf014.py` is built to handle the "dirty" nature of public proxies:
+The validator in `ngf015.py` is built to handle the "dirty" nature of public proxies:
 *   **Curl Error Mapping**: Specifically identifies and logs timeouts (28), empty replies (52), SSL certificate issues (60), and SOCKS resets (97).
 *   **Graceful Shutdown**: Uses signal handlers and `asyncio.Event` to ensure the database is closed and current results are saved even if `Ctrl+C` is pressed.
 *   **Pivot Rotation**: If a pivot proxy reaches a user-defined usage limit or fails a background health check, NGF automatically rotates to a new one from the validated pool.
 
 ### Pro-Tip: Seeding the Database
 For maximum OpSec, run a non-stealth discovery once to "warm" your database:  
-- `python3 ngf014.py --limit 100 --threads 4 --type http --update-sources # Clear`
-- `python3 mgf014.py --limit 100 --threads 4 --type http --proxy-only http://127.0.0.1:9050 # Route through tor`
+- `python3 ngf015.py --limit 100 --threads 4 --type http --update-sources # Clear`
+- `python3 mgf015.py --limit 100 --threads 4 --type http --proxy-only http://127.0.0.1:9050 # Route through tor`
 
 Once the database has working proxies, future runs using `--opsec` or `--proxy-only` will be significantly faster as they can pull pivots directly from known-working seeds.
 
@@ -328,9 +322,55 @@ NGF's OpSec architecture is divided into three distinct phases:
 ```
 
 <div align="center">
-  <img src="docs/dumpExample.png" height="200" style="margin: 0 10px; border-radius: 8px;">
-  <img src="docs/pivotExample.png" height="200" style="margin: 0 10px; border-radius: 8px;">
+  <img src="docs/dumpExample.png" height="300" style="margin: 0 10px; border-radius: 8px;">
+  <img src="docs/pivotExample.png" height="300" style="margin: 0 10px; border-radius: 8px;">
 </div>
+
+---
+
+## Techincal Changes
+
+### 014
+1. Some `database` args.
+2. Preparation for `docker` containerization in hopes to enable `bridged tor` connections.
+3. Small upgrades toards `0.1.5` were I plan to use `github` and possible other hosts like `jackalsyn.com` & `chaosfoundry.digital` to host a sharable `json` index to create a `multual` and `contantly updating` database.
+
+### 015
+* **Comprehensive Signal Handling & Graceful Shutdown Overhaul**
+    After thorough analysis of the original implementation (especially after introducing PivotManager and background tasks), the following major reliability improvements were made:
+    * **Core Changes – Signal Handling & Task Management**
+        - Completely redesigned main() function:
+        - Proper asyncio.get_running_loop() usage instead of deprecated get_event_loop().
+        - More robust termHandle() that immediately cancels the main fTask.
+        - Better second-signal detection and forced exit.
+        - Added cleanup of HTTP sessions (hSession, vSession) on shutdown.
+        - Improved finally block for consistent resource cleanup.
+
+    * **Enhanced _hcPivot() (background pivot health checker):**
+        - Wrapped in try/except asyncio.CancelledError + finally for clean exit.
+        - Better logging on cancellation/shutdown.
+
+    * **Major improvements to run() method:**
+        - Worker tasks now properly handle asyncio.CancelledError.
+        - Early termEvent checks before launching new workers.
+        - TaskGroup now specifically catches CancelledError (using except*).
+        - Progress bar updates preserved even during cancellation.
+        - Cleaner separation of pivot logic and validation.
+
+* **Other Important Differences**
+    - Better cancellation propagation throughout worker tasks and background operations.
+    - Added explicit handling for CancelledError in critical async paths to prevent unhandled exceptions.
+    - Improved background task tracking and force-cleanup timeout logic.
+
+* **Minor bug fixes:**
+    - Fixed potential issues with pivot usage during metadata audits.
+    - More consistent logging during shutdown.
+    - Session cleanup to prevent resource leaks.
+
+* **User Impact:**
+    - Ctrl+C now reliably triggers a clean shutdown — no more hanging processes, lost results, or zombie tasks.
+    - Saves .config / .json files even if interrupted mid-run.
+    - Much more stable when using --opsec, --proxy-only, or --pivot-after features.
 
 ---
 
