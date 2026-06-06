@@ -331,7 +331,7 @@ NGF's OpSec architecture is divided into three distinct phases:
 
 ---
 
-## Techincal Changes
+## Technical Changes
 
 ### 014
 Tbh it doesn't matter...
