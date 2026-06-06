@@ -369,7 +369,7 @@ Tbh it doesn't matter...
     - Session cleanup to prevent resource leaks.
 
 * **User Impact:**  
-    - Ctrl+C now reliably triggers a clean shutdown — no more hanging processes, lost results, or zombie tasks.
+    - Ctrl+C now reliably triggers a clean shutdown - no more hanging processes, lost results, or zombie tasks.
     - Saves .config / .json files even if interrupted mid-run.
     - Much more stable when using --opsec, --proxy-only, or --pivot-after features.
 
