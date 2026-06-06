@@ -337,7 +337,7 @@ NGF's OpSec architecture is divided into three distinct phases:
 Tbh it doesn't matter...
 
 ### 015
-* **Comprehensive Signal Handling & Graceful Shutdown Overhaul**
+* **Comprehensive Signal Handling & Graceful Shutdown Overhaul**  
     After thorough analysis of the original implementation (especially after introducing PivotManager and background tasks), the following major reliability improvements were made:
     * **Core Changes – Signal Handling & Task Management**
         - Completely redesigned main() function:
@@ -347,28 +347,28 @@ Tbh it doesn't matter...
         - Added cleanup of HTTP sessions (hSession, vSession) on shutdown.
         - Improved finally block for consistent resource cleanup.
 
-    * **Enhanced _hcPivot() (background pivot health checker):**
+    * **Enhanced _hcPivot() (background pivot health checker):**  
         - Wrapped in try/except asyncio.CancelledError + finally for clean exit.
         - Better logging on cancellation/shutdown.
 
-    * **Major improvements to run() method:**
+    * **Major improvements to run() method:**  
         - Worker tasks now properly handle asyncio.CancelledError.
         - Early termEvent checks before launching new workers.
         - TaskGroup now specifically catches CancelledError (using except*).
         - Progress bar updates preserved even during cancellation.
         - Cleaner separation of pivot logic and validation.
 
-* **Other Important Differences**
+* **Other Important Differences**  
     - Better cancellation propagation throughout worker tasks and background operations.
     - Added explicit handling for CancelledError in critical async paths to prevent unhandled exceptions.
     - Improved background task tracking and force-cleanup timeout logic.
 
-* **Minor bug fixes:**
+* **Minor bug fixes:**  
     - Fixed potential issues with pivot usage during metadata audits.
     - More consistent logging during shutdown.
     - Session cleanup to prevent resource leaks.
 
-* **User Impact:**
+* **User Impact:**  
     - Ctrl+C now reliably triggers a clean shutdown — no more hanging processes, lost results, or zombie tasks.
     - Saves .config / .json files even if interrupted mid-run.
     - Much more stable when using --opsec, --proxy-only, or --pivot-after features.
