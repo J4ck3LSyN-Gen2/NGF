@@ -21,6 +21,9 @@
 Author : J4ck3LSyN | Version: 0.1.5 | License: MIT | Authority: Chaos Foundry Security Division
 </p>
 
+> _Note:_ For now I will keep `ngf014` due to the massive amounts of `ingress` put into `ngf015`.
+> Only difference will be `ngf015` carries some more arguments (and better over-all handling)
+
 ---
 
 ## Index
