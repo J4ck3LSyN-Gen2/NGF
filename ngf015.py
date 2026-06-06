@@ -747,19 +747,22 @@ class NGFetcher:
 
     # Internals (save,run)
     async def gInfo(self):
-        """"""
+        """Fetch host's public IP metadata"""
         logger.debug("(gInfo) Sourcing host's public metadata...")
-        logger.warning("... gInfo Uses `http://ip-api.com` for information gathering... Are you bridged Yet?...")
+        logger.warning("... gInfo Uses `http://ip-api.com` for information gathering...")
         try:
             async with self.aSemaphore:
-                resp = await self.hSession.get("http://ip-api.com/json/?fields=status,countryCode,city,isp,org,as", timeout=10)
-                if resp.status_code == 200 and resp.content:
+                resp = await self.hSession.get("http://ip-api.com/json/?fields=status,query,countryCode,city,isp,org,as",timeout=10)
+                if resp.status_code == 200:
                     data = resp.json()
-                    self.hAddr = data.get("query") or data.get("ip") or data.get("origin") or None
+                    self.hAddr = (data.get("query") or data.get("ip") or data.get("origin") or None)
                     self.hCountry = data.get("countryCode") or None
-                    logger.info(f"Host IP: `{self.hAddr}` | Country: `{self.hCountry}` | ISP: `{data.get('isp','Unknown')}` | Org: `{data.get('org','Unknown')}` | ASN: `{data.get('as','Unknown')}`")
+                    logger.info(
+                        f"Host IP: `{self.hAddr}` | Country: `{self.hCountry}` | "
+                        f"ISP: `{data.get('isp', 'Unknown')}` | Org: `{data.get('org', 'Unknown')}` | "
+                        f"ASN: `{data.get('as', 'Unknown')}`")
                 else:logger.warning(f"(gInfo) Failed to retrieve host information. Status code: {resp.status_code}")
-        except Exception as E: logger.warning(f"(gInfo) Failed to retrieve host information: [{str(E.__class__.__name__)}] `{str(E)}`")
+        except Exception as E: logger.warning(f"(gInfo) Failed to retrieve host information: [{E.__class__.__name__}] {str(E)}")
 
     async def run(self):
         logger.info("Starting NGF Fetcher...")
