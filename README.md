@@ -334,9 +334,7 @@ NGF's OpSec architecture is divided into three distinct phases:
 ## Techincal Changes
 
 ### 014
-1. Some `database` args.
-2. Preparation for `docker` containerization in hopes to enable `bridged tor` connections.
-3. Small upgrades toards `0.1.5` were I plan to use `github` and possible other hosts like `jackalsyn.com` & `chaosfoundry.digital` to host a sharable `json` index to create a `multual` and `contantly updating` database.
+Tbh it doesn't matter...
 
 ### 015
 * **Comprehensive Signal Handling & Graceful Shutdown Overhaul**
