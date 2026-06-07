@@ -72,7 +72,6 @@ PROXY_SOURCES = {
 logger = logging.getLogger("NGF")
 logger.setLevel(logging.INFO)
 
-# Shared console instance to synchronize logs and progress bars
 CONSOLE = Console()
 rich_handler = RichHandler(console=CONSOLE, show_path=False, omit_repeated_times=False)
 logger.addHandler(rich_handler)
@@ -745,6 +744,53 @@ class NGFetcher:
         await self.db.bUpsert(aCan)
         return aCan
 
+    async def _load_json_raw(self, source: str) -> Any:
+        """Load JSON either from a local path or a remote URL."""
+        if source.startswith(("http://", "https://")):
+            logger.info(f"(load_json) Fetching JSON from remote URL: {source}")
+            try:
+                async with self.aSemaphore:
+                    resp = await self.hSession.get(source, timeout=25)
+                if resp.status_code != 200:
+                    raise ValueError(f"Remote JSON fetch failed with status {resp.status_code}")
+                return json.loads(resp.text)
+            except Exception as e:
+                raise RuntimeError(f"Failed to load remote JSON from `{source}`: {e}")
+
+        p_path = Path(source)
+        if not p_path.exists():
+            raise FileNotFoundError(f"JSON source not found: {source}")
+        try:
+            return json.loads(p_path.read_text())
+        except Exception as e:
+            raise RuntimeError(f"Failed to load JSON from `{source}`: {e}")
+
+    def _normalize_json_proxy_data(self, data: Any) -> List[Dict[str, Any]]:
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return data.get("index") or data.get("proxies") or data.get("data") or []
+        return []
+
+    async def load_json_proxies(self, source: str) -> List[proxy]:
+        raw = await self._load_json_raw(source)
+        proxy_entries = self._normalize_json_proxy_data(raw)
+        proxies: List[proxy] = []
+
+        for item in proxy_entries:
+            if not isinstance(item, dict):
+                continue
+            proto = str(item.get("proto", "")).lower()
+            if not proto or "ip" not in item or "port" not in item:
+                continue
+            try:
+                port = int(item["port"])
+            except (ValueError, TypeError):
+                continue
+            proxies.append(proxy(proto, str(item["ip"]), port, via=f"JSON_LOAD({source})"))
+
+        return proxies
+
     # Internals (save,run)
     async def gInfo(self):
         """Fetch host's public IP metadata"""
@@ -800,6 +846,14 @@ class NGFetcher:
             logger.info(f"(run) Updating sources from `{self.args.update_sources}`...")
             await self.gSources([self.args.update_sources], up=self.args.opsec)
 
+        json_sources: List[str] = []
+        if self.args.update_json:
+            json_sources.append(self.args.update_json)
+        if self.args.validate_json:
+            json_sources.append(self.args.validate_json)
+        if self.args.json_remote:
+            json_sources.extend([u.strip() for u in self.args.json_remote.split(",") if u.strip()])
+
         # Load candidates
         sTypes = list(self.args.type)
         if "https" in sTypes and "http" not in sTypes:
@@ -808,18 +862,32 @@ class NGFetcher:
         test = await self.db.gCandidates(sTypes)
         logger.info(f"(run) Retrieved {len(test)} candidates from database...")
 
-        if not test:
+        if not test and not json_sources:
             logger.warning("(run) No candidates in database. Fetching fresh sources...")
             test = await self.gSources(sources, up=self.args.opsec)
             if not test:
                 logger.error("(run) Failed to retrieve any candidates. Exiting...")
                 return
 
-        # JSON loading (unchanged)
-        jPath = self.args.update_json or self.args.validate_json
-        if jPath:
-            # ... (your existing JSON loading code) ...
-            pass
+        for json_source in json_sources:
+            try:
+                loaded_proxies = await self.load_json_proxies(json_source)
+                existing_ips = {p.ip for p in test}
+                added_count = 0
+                search_types = {t.lower() for t in self.args.type}
+                if "https" in search_types:
+                    search_types.add("http")
+
+                for p in loaded_proxies:
+                    if p.proto.lower() in search_types and p.ip not in existing_ips:
+                        test.append(p)
+                        existing_ips.add(p.ip)
+                        added_count += 1
+
+                logger.info(f"Added {added_count} proxies from JSON source `{json_source}` matching types {self.args.type}.")
+            except Exception as e:
+                logger.error(f"Failed to load JSON source `{json_source}`: {e}")
+
 
         # === Main Validation Loop ===
         logger.info(f"(run) Starting validation on {len(test)} candidates...")
@@ -1018,6 +1086,7 @@ async def main():
     parser.add_argument("--json", help="Path to save the full proxy metadata as a JSON report")
     parser.add_argument("--update-json", help="Re-validate proxies from an existing JSON file and update their metadata")
     parser.add_argument("--validate-json", help="Validate proxies from a JSON file without performing new discovery")
+    parser.add_argument("--json-remote", help="Load proxy metadata from a remote JSON URL (comma-separated for multiple URLs)")
     parser.add_argument("--indent-json", type=int, default=2, help="Indentation for `json` output.")
     # Parsing
     parser.add_argument("--max-latency", type=float, default=DEFAULT_MAX_LATENCY, help=f"Maximum allowed latency in seconds for a proxy to be considered working (default: {DEFAULT_MAX_LATENCY})")
@@ -1061,14 +1130,9 @@ async def main():
     db_group.add_argument("--db-json", help="Export filtered database contents to a JSON file")
     db_group.add_argument("--db-import", help="Import proxy metadata from a JSON file into the database")
     db_group.add_argument("--db-clear", action="store_true", help="Wipe all data from the database")
-    
     args = parser.parse_args()
-
-    if args.verbose:
-        logger.setLevel(logging.DEBUG)
-
+    if args.verbose: logger.setLevel(logging.DEBUG)
     logger.warning("Using any form of free/unauthenticated proxies from public repo's are inheritly risky, use accordingly")
-
     if args.show_config:
         border = "+" + "-" * 67 + "+"
         header = f"|{'NGF v' + __version__ + ' CONFIGURATION':^67}|"
@@ -1089,7 +1153,6 @@ async def main():
         CONSOLE.print(f"[bold cyan]{border}[/]\n")
 
     fetcher = NGFetcher(args)
-
     # Database management mode
     if args.db_dump or args.db_count or args.db_json or args.db_import or args.db_clear:
         logger.debug("Database management mode detected. Initializing database operations...")
@@ -1165,31 +1228,32 @@ async def main():
                 except Exception as E:
                     logger.error(f"Caught Exception: Un-expected exception during operation: `{str(E)}`!")
             if args.db_import:
-                path = Path(args.db_import)
-                if path.exists():
-                    try:
-                        jdata = json.loads(path.read_text())
-                        pdata = jdata if isinstance(jdata,list) else jdata.get("index",[])
-                        imported = 0
-                        for pD in pdata:
-                            if all(k in pD for k in ("ip","port","proto")):
-                                try:
-                                    p = proxy(pD["proto"],pD["ip"],pD["port"],via=f"DB_IMPORT({str(path)})")
-                                    p.country = pD.get("country",None)
-                                    p.city = pD.get("city",None)
-                                    p.isp = pD.get("isp",None)
-                                    p.org = pD.get("org",None)
-                                    p.asn = pD.get("asn",None)
-                                    p.verified = pD.get("verified",False)
-                                    p.working = pD.get("working",False)
-                                    p.latency = pD.get("latency",None)
-                                    p.timeCheck = pD.get("timeCheck",None)
-                                    await fetcher.db.upsert(p)
-                                    imported += 1
-                                except Exception as E: logger.warning(f"(db_import) Failed to parse proxy entry from JSON `{str(path)}`: [{str(E.__class__.__name__)}] `{str(E)}`")
-                        CONSOLE.print(f"[bold green]✓[/] Successfully imported {str(imported)} entries from `{str(path)}` into the database.")
-                    except Exception as E: logger.error(f"(db_import) Failed to import from JSON `{str(path)}`: [{str(E.__class__.__name__)}] `{str(E)}`")
-                else: logger.error(f"(db_import) Specified JSON file for import does not exist: `{str(path)}`")
+                try:
+                    jdata = await fetcher._load_json_raw(args.db_import)
+                    pdata = jdata if isinstance(jdata, list) else jdata.get("index") or jdata.get("proxies") or jdata.get("data") or []
+                    imported = 0
+                    for pD in pdata:
+                        if not isinstance(pD, dict):
+                            continue
+                        if all(k in pD for k in ("ip","port","proto")):
+                            try:
+                                p = proxy(pD["proto"], pD["ip"], pD["port"], via=f"DB_IMPORT({args.db_import})")
+                                p.country = pD.get("country", None)
+                                p.city = pD.get("city", None)
+                                p.isp = pD.get("isp", None)
+                                p.org = pD.get("org", None)
+                                p.asn = pD.get("asn", None)
+                                p.verified = bool(pD.get("verified", False))
+                                p.working = bool(pD.get("working", False))
+                                p.latency = pD.get("latency", None)
+                                p.timeCheck = pD.get("timeCheck", None)
+                                await fetcher.db.upsert(p)
+                                imported += 1
+                            except Exception as E:
+                                logger.warning(f"(db_import) Failed to parse proxy entry from JSON `{args.db_import}`: [{str(E.__class__.__name__)}] `{str(E)}`")
+                    CONSOLE.print(f"[bold green]✓[/] Successfully imported {str(imported)} entries from `{args.db_import}` into the database.")
+                except Exception as E:
+                    logger.error(f"(db_import) Failed to import from JSON `{args.db_import}`: [{str(E.__class__.__name__)}] `{str(E)}`")
         finally:
             logger.debug("Closing database connection...")
             try: await fetcher.db.close()
@@ -1222,27 +1286,20 @@ async def main():
             try: loop.add_signal_handler(sig, termHandle)
             except (NotImplementedError, ValueError): pass
         await fTask
-    except asyncio.CancelledError:
-        logger.warning("Main task was cancelled.")
+    except asyncio.CancelledError: logger.warning("Main task was cancelled.")
     except (KeyboardInterrupt, Exception) as e:
-        if isinstance(e, KeyboardInterrupt):
-            logger.warning("KeyboardInterrupt received.")
-        else:
-            logger.error(f"Unexpected error: {e}")
+        if isinstance(e, KeyboardInterrupt): logger.warning("KeyboardInterrupt received.")
+        else: logger.error(f"Unexpected error: {e}")
         fetcher.termEvent.set()
         fetcher.save()
-    finally:
+    finally: 
         await _cleanup_background_tasks(background_tasks, fetcher)
-        
         # Close HTTP sessions
         for session_attr in ('hSession', 'vSession'):
             session = getattr(fetcher, session_attr, None)
             if session:
-                try:
-                    await session.close()
-                except:
-                    pass
-
+                try: await session.close()
+                except: pass
         logger.info("NGF shutdown complete.")
 
 if __name__ == "__main__": asyncio.run(main())
