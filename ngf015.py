@@ -1013,11 +1013,11 @@ class NGFetcher:
             "tcp_connect_time_out 8000",
             "",
             "[ProxyList]"]
-        logger.debug(f"(save) Output setup: {json.dumps({
+        logger.debug(f"""(save) Output setup: {json.dumps({
             'Timestamp':str(ts),
             'Chain Type:':str(ch),
             'Chain Length':str(cl),
-            'Working Proxies':str(len(self.working))},indent=2).replace('\n','\n-\t')}")
+            'Working Proxies':str(len(self.working))},indent=2).replace('\n','\n-\t')}""")
         if self.args.append_tor: cS.append("socks5  127.0.0.1   9050")
         for p in eList[:cl]: cS.append(f"{p.proto}  {p.ip}  {p.port}")
         fname = self.args.output if self.args.output else f"ngf({str(datetime.now().strftime('%H:%M'))}).config"
