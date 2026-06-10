@@ -468,6 +468,7 @@ class NGFetcher:
         self.pEstLock = asyncio.Lock()
         self.termEvent = asyncio.Event()
         # Pivot manager testing...
+        self._bg_tasks: Set[asyncio.Task] = set()
         self.pivot_mgr = PivotManager()
         logger.debug("...Pivot Locked & Stop Event Set..... Configuring internals...")
         self.working = []
@@ -475,7 +476,6 @@ class NGFetcher:
         self.hCountry = None
         self.pref = {c.strip().upper() for c in (self.args.country or "").split(',') if c.strip()}
         self.excl = {c.strip().upper() for c in (self.args.exclude or "").split(',') if c.strip()}
-        self.afterPivotCount = 0
         logger.debug(f"...Completed initialization...")
 
     # Pivoting 
@@ -573,7 +573,7 @@ class NGFetcher:
         purl = p.format_url()
         target = random.choice(TEST_TARGETS)
         logger.debug(f"(checkProxy) Assessing `{p.proto}://{p.ip}:{p.port}` via `{target}`")
-        if up and self.pivot:
+        if up:
             pivot_url = await self.pivot_mgr.get_pivot_url()
             if pivot_url:
                 current_pivot = await self.pivot_mgr.get_pivot()
@@ -615,6 +615,9 @@ class NGFetcher:
                                 await asyncio.sleep(5 * (attempt + 1))
                                 continue
                     except Exception as E:
+                        if self.args.proxy_only:
+                            logger.error(f"(checkProxy) Metadata audit failed for `{p.ip}` via pivot and --proxy-only is enabled. Skipping.")
+                            return False
                         eStr = str(E)
                         if attempt < MAX_RETRIES:
                             await asyncio.sleep(0.5 * (attempt + 1))
@@ -622,6 +625,11 @@ class NGFetcher:
                         logger.error(f"(checkProxy) Metadata audit failed for `{p.ip}` via pivot: {E}")
                 if not success and not self.args.pivot:
                     return False
+
+        if self.args.proxy_only:
+            logger.debug(f"(checkProxy) Skipping direct validation for `{p.ip}` due to --proxy-only.")
+            return False
+
         # Central validation logic (without pivot, if pivot failed, or awaiting pivots)
         for attempt in range(MAX_RETRIES+1):
             try:
@@ -820,11 +828,15 @@ class NGFetcher:
             if not await self._estPivot():
                 logger.error("(run) Failed to establish initial pivot in proxy-only or opsec mode. Exiting...")
                 return
-            asyncio.create_task(self._hcPivot())
+            hc_task = asyncio.create_task(self._hcPivot())
+            self._bg_tasks.add(hc_task)
+            hc_task.add_done_callback(self._bg_tasks.discard)
         else:
             await self.gInfo()
             if self.args.pivot_after is not None:
-                asyncio.create_task(self._hcPivot())
+                hc_task = asyncio.create_task(self._hcPivot())
+                self._bg_tasks.add(hc_task)
+                hc_task.add_done_callback(self._bg_tasks.discard)
 
         # === Source Collection ===
         sources = []
@@ -947,9 +959,10 @@ class NGFetcher:
                                 if len(self.working) < self.args.limit:
                                     self.working.append(p)
                                     progress.update(task, found=len(self.working))
+                                    lat_str = f"{p.latency:5.2f}s" if p.latency is not None else "??.??s"
                                     self.console.print(
                                         f"[bold green]✓[/] {p.proto.upper():7} {p.ip:15}:{p.port:<5} "
-                                        f"| {p.latency:5.2f}s | {p.anonymity:9} | {country:2} "
+                                        f"| {lat_str} | {p.anonymity:9} | {country:2} "
                                         f"| DNS: {'LEAK' if p.leakDNS else 'SAFE'} "
                                         f"| {p.isp} | {p.org}"
                                     )
@@ -1014,13 +1027,13 @@ class NGFetcher:
             "",
             "[ProxyList]"]
         logger.debug(f"""(save) Output setup: {json.dumps({
-            'Timestamp':str(ts),
-            'Chain Type:':str(ch),
-            'Chain Length':str(cl),
-            'Working Proxies':str(len(self.working))},indent=2).replace('\n','\n-\t')}""")
+            'Timestamp': ts,
+            'Chain Type:': ch,
+            'Chain Length': cl,
+            'Working Proxies': len(self.working)},indent=2).replace('\n','\n-\t')}""")
         if self.args.append_tor: cS.append("socks5  127.0.0.1   9050")
         for p in eList[:cl]: cS.append(f"{p.proto}  {p.ip}  {p.port}")
-        fname = self.args.output if self.args.output else f"ngf({str(datetime.now().strftime('%H:%M'))}).config"
+        fname = self.args.output if self.args.output else f"ngf({datetime.now().strftime('%H-%M')}).config"
         opath = Path(fname)
         if self.args.output_path:
             odir = Path(self.args.output_path)
@@ -1059,14 +1072,15 @@ class NGFetcher:
 # ******************************** INIT ********************************
 async def _cleanup_background_tasks(tasks: Set[asyncio.Task], fetcher: NGFetcher):
     """Helper to cleanly cancel and await background tasks."""
-    if not tasks:
+    all_tasks = tasks.union(getattr(fetcher, '_bg_tasks', set()))
+    if not all_tasks:
         return
-    logger.debug(f"Cleaning up {len(tasks)} background tasks...")
-    for task in tasks:
+    logger.debug(f"Cleaning up {len(all_tasks)} background tasks...")
+    for task in all_tasks:
         if not task.done():
             task.cancel()
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+    if all_tasks:
+        await asyncio.gather(*all_tasks, return_exceptions=True)
     # Close DB if still open
     if hasattr(fetcher, 'db') and fetcher.db and fetcher.db.db:
         try:
@@ -1173,8 +1187,8 @@ async def main():
                 CONSOLE.print(f"  - By Protocol: {json.dumps(stats.get('by_protocol',{}),indent=2)}")
                 CONSOLE.print(f"  - By Country: {json.dumps(stats.get('by_country',{}),indent=2)}")
                 if stats.get('regions'):
-                    CONSOLE.print(f"  - By Region: {json.dumps(stats.get('by_region',{}),indent=2)}")
-                    for country, count in stats['regions'].items():
+                    CONSOLE.print(f"  - Regional Breakdown:")
+                    for country, count in stats.get('regions', {}).items():
                         CONSOLE.print(f"    - {country}: {count}")
             if args.db_dump:
                 res = await fetcher.db.qIndex(
