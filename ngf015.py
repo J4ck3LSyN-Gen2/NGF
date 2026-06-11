@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import asyncio, argparse, json, logging, os, random, re, sys, signal, time, traceback
+import asyncio, argparse, json, logging, os, random, re, sys, signal, time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Set, Union
@@ -171,8 +171,7 @@ class PivotManager:
         return self._after_count  # Read-only for logging
 
 class database:
-    """
-    """
+    """SQLite backend for persistent proxy state and metadata."""
     # Initializers (__init__(on call: database()),init)
     # ---
     def __init__(self,path:str=DB_PATH,FALLBACK_TMP:Optional[bool]=False):
@@ -180,62 +179,52 @@ class database:
         self.FALLBACK_TMP = FALLBACK_TMP
         self.db = None
         self._lock = asyncio.Lock()
-        logger.debug(f"Initialized database method at with path: {path}")
 
     async def init(self):
-        """Initialization operations..."""
+        """Initialize database connection, tables, and performance optimizations."""
         dbp = Path(self.path).resolve()
-        logger.debug(f"Initializing database at {dbp} ...")
-        logger.debug(f"Assessing current files for `{self.path}`...")
         if not dbp.parent.exists():
-            logger.warning(f"Failed to find database directory `{str(dbp.parent)}`, attempting creation.")
             try:
                 dbp.parent.mkdir(parents=True,exist_ok=True)
-                logger.info(f"Created database directory: {dbp.parent}")
             except Exception as E:
                 logger.critical(f"Failed to create database directory {dbp.parent}: {E}")
                 sys.exit(1)
-        logger.debug(f"Assessing directory `write` permissions: '{str(dbp.parent)}' ...")
+
         if not os.access(dbp.parent,os.W_OK):
-            logger.critical(f"Permission denied: Directory '{dbp.parent}' is not writable. Database cannot be initialized.")
+            logger.critical(f"Permission denied: Directory '{dbp.parent}' is not writable.")
             exit(1)
-        logger.debug(f"We have permissions!.. Attempting to database connection @ {dbp}...")
+
         try: self.db = await aiosqlite.connect(str(dbp))
         except Exception as E:
             logger.critical(f"Fatal error: Unable to open database file at {dbp}: {E}")
             sys.exit(1)
-        logger.debug("Connected!.. Attempting execution of `stability PRAGMAs`...")
+
         try:
             await self.db.execute("PRAGMA busy_timeout = 5000")
             await self.db.execute("PRAGMA synchronous = NORMAL")
             await self.db.execute("PRAGMA temp_store = MEMORY")
-        except Exception as E:
-            logger.warning(f"There was an issue during execution: '{str(E)}'\n---\n {str(traceback.format_exc())} \n---\n")
-            pass
-        logger.debug("Finished... Attempting table creation...")
-        try: await self.db.execute("CREATE TABLE IF NOT EXISTS idx (ip TEXT PRIMARY KEY,proto TEXT,port INTEGER,working INTEGER,latency REAL,anonymity TEXT,country TEXT,city TEXT,isp TEXT,org TEXT,asn TEXT,leakDNS INTEGER,verified INTEGER,timeCheck TEXT,via TEXT)")
-        except Exception as E:
-            logger.warning(f"There was an issue during table creation: '{str(E)}'!")
-            if "disk I/O error" in str(E).lower():
-                logger.warning("Disk I/O error detected. Falling back to MEMORY journaling.")
-                await self.db.execute("PRAGMA journal_mode = MEMORY")
-                logger.debug("Re-Attempting table creation now that disk journaling is bypassed...")
-                await self.db.execute("CREATE TABLE IF NOT EXISTS idx (ip TEXT PRIMARY KEY,proto TEXT,port INTEGER,working INTEGER,latency REAL,anonymity TEXT,country TEXT,city TEXT,isp TEXT,org TEXT,asn TEXT,leakDNS INTEGER,verified INTEGER,timeCheck TEXT,via TEXT)")
-            else: raise
-        logger.debug("Finished... Attempting to enable high-concurrency optimizations...")
+        except Exception as e:
+            logger.debug(f"Failed to set initial pragmas: {e}")
+
+        table_sql = "CREATE TABLE IF NOT EXISTS idx (ip TEXT PRIMARY KEY,proto TEXT,port INTEGER,working INTEGER,latency REAL,anonymity TEXT,country TEXT,city TEXT,isp TEXT,org TEXT,asn TEXT,leakDNS INTEGER,verified INTEGER,timeCheck TEXT,via TEXT)"
         try:
-            await self.db.execute("PRAGMA journal_mode=WAL");await self.db.execute("PRAGMA cache_size=-64000")
-        except Exception as E: logger.debug(f"WAL mode not supported on this filesystem: '{str(E)}'!")
-        logger.debug("Finished... Creating indexes...")
-        await self.db.execute("CREATE INDEX IF NOT EXISTS int_working ON idx(working)")
-        await self.db.execute("CREATE INDEX IF NOT EXISTS int_country ON idx(country)")
-        await self.db.execute("CREATE INDEX IF NOT EXISTS int_latency ON idx(latency)")
-        await self.db.execute("CREATE INDEX IF NOT EXISTS int_anonymity ON idx(anonymity)")
-        await self.db.execute("CREATE INDEX IF NOT EXISTS int_proto ON idx(proto)")
-        await self.db.execute("CREATE INDEX IF NOT EXISTS int_timeCheck ON idx(timeCheck)")
-        logger.debug("Finished... Commiting...")
+            await self.db.execute(table_sql)
+        except Exception as e:
+            if "disk I/O error" in str(e).lower():
+                await self.db.execute("PRAGMA journal_mode = MEMORY")
+                await self.db.execute(table_sql)
+            else:
+                raise
+
+        try:
+            await self.db.execute("PRAGMA journal_mode=WAL")
+            await self.db.execute("PRAGMA cache_size=-64000")
+        except Exception as e:
+            logger.debug(f"WAL mode not supported: {e}")
+
+        for col in ["working", "country", "latency", "anonymity", "proto", "timeCheck"]:
+            await self.db.execute(f"CREATE INDEX IF NOT EXISTS int_{col} ON idx({col})")
         await self.db.commit()
-        logger.debug("Initialization Completed!")
 
     # Index operations (get,query,...)
     # ---
@@ -374,8 +363,6 @@ class database:
                 "verified": 0,
                 "by_protocol": {},
                 "by_country": {},
-                "by_region": {},
-                "regions": {},
                 "lowLatency": 0,
                 "highLatency": 0,
                 "elite": 0,
@@ -392,11 +379,8 @@ class database:
                 
             async with self.db.execute("SELECT country, COUNT(*) FROM idx GROUP BY country ORDER BY COUNT(*) DESC") as cursor:
                 rows = await cursor.fetchall()
-                country_counts = {r[0] if r[0] else "Unknown": r[1] for r in rows}
-                stats["by_country"] = country_counts
-                stats["by_region"] = country_counts
-                stats["regions"] = country_counts
-                
+                stats["by_country"] = {r[0] if r[0] else "Unknown": r[1] for r in rows}
+
             async with self.db.execute("SELECT COUNT(*) FROM idx WHERE latency <= 5.0") as cursor: stats["lowLatency"] = (await cursor.fetchone())[0]
             async with self.db.execute("SELECT COUNT(*) FROM idx WHERE latency > 5.0") as cursor: stats["highLatency"] = (await cursor.fetchone())[0]
             async with self.db.execute("SELECT COUNT(*) FROM idx WHERE anonymity = 'Elite'") as cursor: stats["elite"] = (await cursor.fetchone())[0]
@@ -406,10 +390,6 @@ class database:
             logger.debug(f"Statistics: {dstr}")
             return stats
 
-    async def stats(self) -> Dict[str, Any]:
-        """Alias for statistics."""
-        return await self.statistics()
-    
     async def upsert(self,p:proxy):
         """Inserts or updates proxy records."""
         logger.debug(f"(upsert) -> {p.ip} (Working: {p.working} | Latency: {p.latency})")
@@ -445,7 +425,9 @@ class database:
 
     async def close(self):
         """"""
-        if self.db: await self.db.close()
+        if self.db:
+            await self.db.close()
+            self.db = None
 
 # ****************************** FETCHER *******************************
 class NGFetcher:
@@ -461,7 +443,7 @@ class NGFetcher:
         self.console = CONSOLE
         self.hSession = requests.AsyncSession(impersonate="chrome110")
         self.vSession = requests.AsyncSession(impersonate="chrome110")
-        logger.debug("...AsyncSessions initialized with `Chrome 110 TLS Impoersonation...`")
+        logger.debug("...AsyncSessions initialized with `Chrome 110 TLS Impersonation...`")
         self.tSemaphore = asyncio.Semaphore(args.threads)
         self.aSemaphore = asyncio.Semaphore(8)
         logger.debug("...Semaphore's initialized... Establishing `lock` & `event`...")
@@ -803,7 +785,7 @@ class NGFetcher:
     async def gInfo(self):
         """Fetch host's public IP metadata"""
         logger.debug("(gInfo) Sourcing host's public metadata...")
-        logger.warning("... gInfo Uses `http://ip-api.com` for information gathering...")
+        logger.info("... gInfo Uses `http://ip-api.com` for information gathering...")
         try:
             async with self.aSemaphore:
                 resp = await self.hSession.get("http://ip-api.com/json/?fields=status,query,countryCode,city,isp,org,as",timeout=10)
@@ -854,10 +836,6 @@ class NGFetcher:
             custom = [s.strip() for s in self.args.source.split(",") if s.strip()]
             sources.extend(custom)
 
-        if self.args.update_sources:
-            logger.info(f"(run) Updating sources from `{self.args.update_sources}`...")
-            await self.gSources([self.args.update_sources], up=self.args.opsec)
-
         json_sources: List[str] = []
         if self.args.update_json:
             json_sources.append(self.args.update_json)
@@ -874,12 +852,24 @@ class NGFetcher:
         test = await self.db.gCandidates(sTypes)
         logger.info(f"(run) Retrieved {len(test)} candidates from database...")
 
+        # Update from web sources if requested or if DB is empty and no local JSON provided
+        if self.args.update_sources or (not test and not json_sources):
+            logger.info("(run) Fetching fresh sources from web...")
+            fresh = await self.gSources(sources, up=self.args.opsec)
+            # Merge fresh candidates into test list
+            existing_ips = {p.ip for p in test}
+            added = 0
+            for p in fresh:
+                if p.ip not in existing_ips:
+                    test.append(p)
+                    existing_ips.add(p.ip)
+                    added += 1
+            if added > 0:
+                logger.info(f"(run) Added {added} fresh candidates from sources.")
+
         if not test and not json_sources:
-            logger.warning("(run) No candidates in database. Fetching fresh sources...")
-            test = await self.gSources(sources, up=self.args.opsec)
-            if not test:
-                logger.error("(run) Failed to retrieve any candidates. Exiting...")
-                return
+            logger.error("(run) No candidates found in database or sources. Exiting...")
+            return
 
         for json_source in json_sources:
             try:
@@ -984,13 +974,29 @@ class NGFetcher:
                     logger.error(f"Worker error for {p.ip}: {e}")
                     progress.update(task, advance=1)
 
-            logger.debug(f"(run) Scheduling {len(test)} validation tasks...")
+            logger.debug(f"(run) Scheduling {len(test)} validation tasks using worker pool...")
             try:
-                async with asyncio.TaskGroup() as tg:
-                    for p in test:
-                        if self.termEvent.is_set():
+                # Initialize queue and populate it with candidates
+                queue = asyncio.Queue()
+                for p in test:
+                    queue.put_nowait(p)
+
+                async def worker_pool():
+                    """Persistent worker that processes proxies from the queue."""
+                    while not self.termEvent.is_set():
+                        try:
+                            p = queue.get_nowait()
+                        except asyncio.QueueEmpty:
                             break
-                        tg.create_task(worker(p))
+                        try:
+                            await worker(p)
+                        finally:
+                            queue.task_done()
+
+                async with asyncio.TaskGroup() as tg:
+                    # Spawn exactly the number of configured threads as persistent workers
+                    for _ in range(min(self.args.threads, len(test))):
+                        tg.create_task(worker_pool())
             except* asyncio.CancelledError:
                 logger.info("Validation tasks were cancelled.")
             except* Exception as exc:
@@ -1003,70 +1009,66 @@ class NGFetcher:
         self.save()
 
     def save(self):
-        """"""
-        logger.debug("(save) Attempting save...")
-        eList = list(self.working)
-        if self.args.chain_min_latency is not None: eList = [p for p in eList if p.latency is not None and p.latency >= self.args.chain_min_latency]
-        if self.args.chain_shuffle: random.shuffle(eList)
-        else: eList.sort(key=lambda p: (
+        """Save validated proxies to configuration and JSON files."""
+        logger.debug("Saving results...")
+        export_list = list(self.working)
+        if self.args.chain_min_latency is not None:
+            export_list = [p for p in export_list if p.latency is not None and p.latency >= self.args.chain_min_latency]
+        
+        if self.args.chain_shuffle:
+            random.shuffle(export_list)
+        else:
+            export_list.sort(key=lambda p: (
             p.country.upper() not in self.pref if self.pref else False,
             p.anonymity != "Elite",
             p.latency or 9999))
+
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H-%M-%S UTC")
-        cm = {0:"dynamic_chain",1:"random_chain",2:"strict_chain"}
-        path:Optional[str]=None
-        fname:Optional[str]=None
-        ch = cm.get(self.args.chain_type,"dynamic_chain")
+        chain_modes = {0: "dynamic_chain", 1: "random_chain", 2: "strict_chain"}
+        chain_type = chain_modes.get(self.args.chain_type, "dynamic_chain")
         cl = self.args.chain_length or self.args.limit
-        cS = [
+        config_lines = [
             f"# NGF 0.1.5 | {ts} | Working(?): {str(len(self.working))}",
             "",
-            f"{str(ch)}",
+            f"{chain_type}",
             "tcp_read_time_out 15000",
             "tcp_connect_time_out 8000",
             "",
             "[ProxyList]"]
-        logger.debug(f"""(save) Output setup: {json.dumps({
-            'Timestamp': ts,
-            'Chain Type:': ch,
-            'Chain Length': cl,
-            'Working Proxies': len(self.working)},indent=2).replace('\n','\n-\t')}""")
-        if self.args.append_tor: cS.append("socks5  127.0.0.1   9050")
-        for p in eList[:cl]: cS.append(f"{p.proto}  {p.ip}  {p.port}")
-        fname = self.args.output if self.args.output else f"ngf({datetime.now().strftime('%H-%M')}).config"
-        opath = Path(fname)
-        if self.args.output_path:
-            odir = Path(self.args.output_path)
-            if not odir.exists(): odir.mkdir(parents=True,exist_ok=True)
-            opath = odir / opath
-        logger.debug(f"(save) `{str(opath)}` text: \n{'\n+\t'.join(cS)}")
-        # .config
+
+        if self.args.append_tor:
+            config_lines.append("socks5  127.0.0.1   9050")
+        
+        for p in export_list[:cl]:
+            config_lines.append(f"{p.proto}  {p.ip}  {p.port}")
+
+        output_name = self.args.output or f"ngf_{datetime.now().strftime('%H-%M')}.config"
+        opath = Path(self.args.output_path) / output_name if self.args.output_path else Path(output_name)
+        
         try:
-            logger.debug(f".... Writing `{str(fname)}` ({str(len('\n'.join(cS)))}) bytes...")
-            opath.write_text(str("\n".join(cS)))
-            logger.info(f"successfully saved: `{str(opath)}` ({len(self.working)})")
-        except PermissionError: logger.error(f"PermissionError: Failed to write to `{str(opath)}`!")
-        except Exception as E: logger.error(f"Caught Exception: Un-expected exception during operation: `{str(E)}`!")
-        # .json
-        if self.args.json or self.args.update_json or self.args.validate_json:
-            pstr = self.args.json or self.args.update_json or self.args.validate_json
-            path = Path(pstr)
-            if self.args.output_path:
-                odir = Path(self.args.output_path)
-                odir.mkdir(parents=True,exist_ok=True)
-                path = odir / path
-            idx = [p.format_json() for p in eList[:cl]]
-            export = {
-                "timestamp":ts,
-                "version":__version__,
-                "author":__author__,
-                "index":idx,
-                "count":len(idx)}
+            if opath.parent: opath.parent.mkdir(parents=True, exist_ok=True)
+            opath.write_text("\n".join(config_lines))
+            logger.info(f"Saved proxychains config: `{opath}`")
+        except Exception as e:
+            logger.error(f"Failed to save config: {e}")
+
+        json_path_str = self.args.json or self.args.update_json or self.args.validate_json
+        if json_path_str:
+            jpath = Path(self.args.output_path) / json_path_str if self.args.output_path else Path(json_path_str)
             try:
-                path.write_text(json.dumps(export,indent=self.args.indent_json))
-                logger.info(f"Successfully exported metadata: `{str(path)}` ({len(self.working)})...")
-            except PermissionError: logger.error(f"PermissionError: Failed to write to `{str(path)}`!")
-            except Exception as E: logger.error(f"Caught Exception: Un-expected exception during operation: `{str(E)}`!")
+                if jpath.parent: jpath.parent.mkdir(parents=True, exist_ok=True)
+                idx = [p.format_json() for p in export_list[:cl]]
+                export_data = {
+                    "timestamp": ts,
+                    "version": __version__,
+                    "author": __author__,
+                    "index": idx,
+                    "count": len(idx)
+                }
+                jpath.write_text(json.dumps(export_data, indent=self.args.indent_json))
+                logger.info(f"Exported JSON metadata: `{jpath}`")
+            except Exception as e:
+                logger.error(f"Failed to export JSON: {e}")
             
 
 # ******************************** INIT ********************************
@@ -1108,7 +1110,7 @@ async def main():
     parser.add_argument("--country", help="Filter results to these country codes, comma-separated (e.g., US,GB,DE)")
     parser.add_argument("--exclude", help="Exclude these country codes from the final results, comma-separated (e.g., CN,RU)")
     # Proxychains
-    parser.add_argument("-o", "--output", help="Path to save the generated proxychains configuration file (default: ngf<hour:min>.config)")
+    parser.add_argument("-o", "--output", help="Path to save the generated proxychains configuration file (default: ngf_HH-MM.config)")
     parser.add_argument("--output-path", type=str, default="ngfdata", help="Path to save output files (default: ngfdata)")
     parser.add_argument("--chain-type", type=int, choices=[0, 1, 2], default=0, help="Proxychains connection strategy: 0=dynamic_chain, 1=random_chain, 2=strict_chain (default: 0)")
     parser.add_argument("--chain-length", type=int, help="Number of proxies to include in the output configuration")
@@ -1179,7 +1181,7 @@ async def main():
                     CONSOLE.print(f"[bold green]✓[/] Database wiped successfully.")
                 else: CONSOLE.print(f"[bold yellow]⚠[/] Database clear operation cancelled.")
             if args.db_count:
-                stats = await fetcher.db.stats()
+                stats = await fetcher.db.statistics()
                 CONSOLE.print(f"[bold cyan]Database Statistics:[/]")
                 CONSOLE.print(f"  - Total Proxies: {stats.get('total',0)}")
                 CONSOLE.print(f"  - Verified: {stats.get('verified',0)}")
@@ -1245,27 +1247,28 @@ async def main():
                 try:
                     jdata = await fetcher._load_json_raw(args.db_import)
                     pdata = jdata if isinstance(jdata, list) else jdata.get("index") or jdata.get("proxies") or jdata.get("data") or []
-                    imported = 0
+                    imported_proxies = []
                     for pD in pdata:
                         if not isinstance(pD, dict):
                             continue
                         if all(k in pD for k in ("ip","port","proto")):
                             try:
                                 p = proxy(pD["proto"], pD["ip"], pD["port"], via=f"DB_IMPORT({args.db_import})")
-                                p.country = pD.get("country", None)
-                                p.city = pD.get("city", None)
-                                p.isp = pD.get("isp", None)
-                                p.org = pD.get("org", None)
-                                p.asn = pD.get("asn", None)
+                                p.country = pD.get("country")
+                                p.city = pD.get("city")
+                                p.isp = pD.get("isp")
+                                p.org = pD.get("org")
+                                p.asn = pD.get("asn")
                                 p.verified = bool(pD.get("verified", False))
                                 p.working = bool(pD.get("working", False))
-                                p.latency = pD.get("latency", None)
-                                p.timeCheck = pD.get("timeCheck", None)
-                                await fetcher.db.upsert(p)
-                                imported += 1
+                                p.latency = pD.get("latency")
+                                p.timeCheck = pD.get("timeCheck")
+                                imported_proxies.append(p)
                             except Exception as E:
                                 logger.warning(f"(db_import) Failed to parse proxy entry from JSON `{args.db_import}`: [{str(E.__class__.__name__)}] `{str(E)}`")
-                    CONSOLE.print(f"[bold green]✓[/] Successfully imported {str(imported)} entries from `{args.db_import}` into the database.")
+                    if imported_proxies:
+                        await fetcher.db.bUpsert(imported_proxies)
+                    CONSOLE.print(f"[bold green]✓[/] Successfully imported {len(imported_proxies)} entries from `{args.db_import}` into the database.")
                 except Exception as E:
                     logger.error(f"(db_import) Failed to import from JSON `{args.db_import}`: [{str(E.__class__.__name__)}] `{str(E)}`")
         finally:
