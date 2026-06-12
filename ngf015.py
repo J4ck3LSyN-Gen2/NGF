@@ -20,6 +20,7 @@ __license__ = "MIT"
 DEFAULT_TIMEOUT = 10
 DEFAULT_MAX_LATENCY = 8.0
 DEFAULT_CONCURRENCY = 40
+DEFAULT_PIVOT_LIMIT = 100
 MAX_PROXIES = 250
 MAX_RETRIES = 2
 SHUTDOWN_TIMEOUT = 15  # Seconds to wait for active tasks before forcing exit
@@ -40,27 +41,37 @@ TEST_TARGETS = [
 
 PROXY_SOURCES = {
     "socks5": [
+        "https://raw.githubusercontent.com/iplocate/free-proxy-list/refs/heads/main/protocols/socks5.txt", # Updated every 30 mins
+        "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/main/MostStable/socks5.txt",
+        "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/refs/heads/main/Stable/socks5.txt",
         "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
         "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks5/data.txt",
         "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",
-        "https://raw.githubusercontent.com/proxyscrape/free-proxy-list/main/proxies/socks5.txt",
         "https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt",
         "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/socks5.txt",
         "https://raw.githubusercontent.com/roosterkid/openproxylist/refs/heads/main/SOCKS5_RAW.txt"
     ],
     "socks4": [
+        "https://raw.githubusercontent.com/iplocate/free-proxy-list/refs/heads/main/protocols/socks4.txt", # Updated every 30 mins
+        "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/refs/heads/main/MostStable/socks4.txt",
+        "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/refs/heads/main/Stable/socks4.txt",
         "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt",
         "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt",
         "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks4/data.txt",
         "https://raw.githubusercontent.com/roosterkid/openproxylist/refs/heads/main/SOCKS4_RAW.txt"
     ],
     "http": [
+        "https://raw.githubusercontent.com/iplocate/free-proxy-list/refs/heads/main/protocols/http.txt", # Updated every 30 mins
+        "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/refs/heads/main/MostStable/http.txt",
+        "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/refs/heads/main/Stable/http.txt",
         "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
         "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt",
         "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
         "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies.txt",
     ],
     "https": [
+        "https://raw.githubusercontent.com/iplocate/free-proxy-list/refs/heads/main/protocols/https.txt", # Updated every 30 mins
+        "https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/refs/heads/main/Stable/https.txt",
         "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/refs/heads/master/https.txt",
         "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-https.txt",
         "https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/https.txt",
@@ -201,12 +212,15 @@ class database:
 
         try:
             await self.db.execute("PRAGMA busy_timeout = 5000")
-            await self.db.execute("PRAGMA synchronous = NORMAL")
+            await self.db.execute("PRAGMA synchronous = OFF")
             await self.db.execute("PRAGMA temp_store = MEMORY")
+            await self.db.execute("PRAGMA mmap_size = 2147483648") # 2GB
+            await self.db.execute("PRAGMA locking_mode = EXCLUSIVE")
+            await self.db.execute("PRAGMA cache_size = -128000")   # 128MB
         except Exception as e:
             logger.debug(f"Failed to set initial pragmas: {e}")
 
-        table_sql = "CREATE TABLE IF NOT EXISTS idx (ip TEXT PRIMARY KEY,proto TEXT,port INTEGER,working INTEGER,latency REAL,anonymity TEXT,country TEXT,city TEXT,isp TEXT,org TEXT,asn TEXT,leakDNS INTEGER,verified INTEGER,timeCheck TEXT,via TEXT)"
+        table_sql = "CREATE TABLE IF NOT EXISTS idx (ip TEXT,proto TEXT,port INTEGER,working INTEGER,latency REAL,anonymity TEXT,country TEXT,city TEXT,isp TEXT,org TEXT,asn TEXT,leakDNS INTEGER,verified INTEGER,timeCheck TEXT,via TEXT, PRIMARY KEY(ip, port, proto))"
         try:
             await self.db.execute(table_sql)
         except Exception as e:
@@ -218,7 +232,6 @@ class database:
 
         try:
             await self.db.execute("PRAGMA journal_mode=WAL")
-            await self.db.execute("PRAGMA cache_size=-64000")
         except Exception as e:
             logger.debug(f"WAL mode not supported: {e}")
 
@@ -404,24 +417,50 @@ class database:
 
     async def bUpsert(self,proxies:List[proxy]):
         """Bulk insert/update for discovery phases."""
-        logger.debug(f"(upsert) [BATCH] -> {len(proxies)} proxies...")
+        logger.info(f"(bUpsert) Bulk inserting {len(proxies)} proxy candidates...")
         if not proxies: 
             logger.debug("No proxies to upsert!");return
         async with self._lock:
-            data = [( p.ip,p.proto,p.port,int(p.working),p.latency, p.anonymity,p.country,p.city,p.isp,p.org,p.asn, int(p.leakDNS) if p.leakDNS is not None else None, int(p.verified),p.timeCheck,p.via) for p in proxies]
-            await self.db.executemany("""
-            INSERT OR IGNORE INTO idx
-            (ip,proto,port,working,latency,anonymity,country,city,isp,org,asn,leakDNS,verified,timeCheck,via)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",data)
-        await self.db.commit()
+            try:
+                # Ensure we are in a transaction for speed
+                await self.db.execute("BEGIN")
+                # Smaller chunk size to ensure we stay well under SQLITE_LIMIT_VARIABLE_NUMBER
+                chunk_size = 500
+                for i in range(0, len(proxies), chunk_size):
+                    chunk = proxies[i:i+chunk_size]
+                    data = [( p.ip,p.proto,p.port,int(p.working),p.latency, p.anonymity,p.country,p.city,p.isp,p.org,p.asn, int(p.leakDNS) if p.leakDNS is not None else None, int(p.verified),p.timeCheck,p.via) for p in chunk]
+                    await self.db.executemany(
+                        """
+                        INSERT INTO idx (ip,proto,port,working,latency,anonymity,country,city,isp,org,asn,leakDNS,verified,timeCheck,via)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        ON CONFLICT(ip, port, proto) DO UPDATE SET
+                            working = excluded.working,
+                            latency = excluded.latency,
+                            anonymity = excluded.anonymity,
+                            country = excluded.country,
+                            city = excluded.city,
+                            isp = excluded.isp,
+                            org = excluded.org,
+                            asn = excluded.asn,
+                            leakDNS = excluded.leakDNS,
+                            verified = excluded.verified,
+                            timeCheck = excluded.timeCheck,
+                            via = excluded.via
+                        """, data)
+                await self.db.commit()
+            except Exception as e:
+                await self.db.rollback()
+                logger.error(f"(bUpsert) Critical error during bulk database update: {e}")
+                # We do not raise here to prevent stopping the entire fetcher, 
+                # but the rollback ensures no partial/corrupt data is left.
 
     async def clear(self):
         """"""
         logger.debug(f"Clearing all entries from {self.path}")
         async with self._lock:
             await self.db.execute("DELETE FROM idx")
-            await self.db.execute("VACUUM")
             await self.db.commit()
+            await self.db.execute("VACUUM")
 
     async def close(self):
         """"""
@@ -459,6 +498,18 @@ class NGFetcher:
         self.pref = {c.strip().upper() for c in (self.args.country or "").split(',') if c.strip()}
         self.excl = {c.strip().upper() for c in (self.args.exclude or "").split(',') if c.strip()}
         logger.debug(f"...Completed initialization...")
+
+    async def _get_pivot_url(self, wait: bool = False) -> Optional[str]:
+        """Retrieve the current pivot URL. Optionally wait/establish if missing."""
+        purl = await self.pivot_mgr.get_pivot_url()
+        if purl:
+            return purl
+
+        # If no pivot but we are in OpSec mode or told to wait
+        if wait or self.args.opsec or self.args.proxy_only:
+            if await self._estPivot():
+                return await self.pivot_mgr.get_pivot_url()
+        return None
 
     # Pivoting 
     async def _setPivot(self,p:proxy):
@@ -556,7 +607,7 @@ class NGFetcher:
         target = random.choice(TEST_TARGETS)
         logger.debug(f"(checkProxy) Assessing `{p.proto}://{p.ip}:{p.port}` via `{target}`")
         if up:
-            pivot_url = await self.pivot_mgr.get_pivot_url()
+            pivot_url = await self._get_pivot_url(wait=True)
             if pivot_url:
                 current_pivot = await self.pivot_mgr.get_pivot()
                 logger.debug(f"(checkProxy) [AUDIT] {current_pivot.ip if current_pivot else '??'} ↪ {p.ip} ↪ {target}")
@@ -571,8 +622,9 @@ class NGFetcher:
                                 timeout=10)
                             
                             # Update usage through manager
+                            limit = self.args.pivot_limit or DEFAULT_PIVOT_LIMIT if self.args.pivot_rotate else None
                             should_rotate = await self.pivot_mgr.increment_usage(
-                                self.args.pivot_limit if self.args.pivot_rotate else None
+                                limit
                             )
                             if should_rotate:
                                 asyncio.create_task(self._estPivot())
@@ -674,23 +726,25 @@ class NGFetcher:
 
     async def gSources(self, urls: List[str], up: bool = False) -> List[proxy]:
         """Fetch proxy lists from multiple sources."""
-        fp = await self.pivot_mgr.get_pivot_url() if up else None
-        pat = re.compile(r'(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d):(\d{1,5})')
+        # Tightened regex with word boundaries to avoid false positives and partial strings
+        pat = re.compile(r'\b(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d):(\d{1,5})\b')
         
         async def single(u: str) -> List[proxy]:
             found = []
             try:
-                logger.debug(f"(gSources.single) Fetching `{u}`...")
+                fp = await self._get_pivot_url(wait=up) if up else None
+                logger.debug(f"(gSources.single) Fetching `{u}` via {fp or 'DIRECT'}...")
                 resp = await self.hSession.get(u, proxy=fp, timeout=25)
                 
                 if resp.status_code != 200:
                     logger.warning(f"(gSources.single) `{u}` returned {resp.status_code}")
                     return []
                 
-                # Update pivot usage if applicable
+                # Update pivot usage if applicable through manager
                 if up and fp:
+                    limit = self.args.pivot_limit or DEFAULT_PIVOT_LIMIT if self.args.pivot_rotate else None
                     should_rotate = await self.pivot_mgr.increment_usage(
-                        self.args.pivot_limit if self.args.pivot_rotate else None
+                        limit
                     )
                     if should_rotate:
                         asyncio.create_task(self._estPivot())
@@ -701,12 +755,17 @@ class NGFetcher:
                     try:
                         ip_port = match.group(0)
                         ip, port = ip_port.split(":")
-                        port = int(port)
+                        ip, port = ip.strip(), int(port)
                         if 1 <= port <= 65535:
                             found.append(proxy(dproto, ip, port, via=u))
                     except Exception:
                         continue
-                        
+
+                if self.args.load_all:
+                    # Clean up URL for display
+                    display_url = u[:60] + "..." if len(u) > 63 else u
+                    self.console.print(f"[bold blue][*][/] Source [cyan]{display_url:63}[/] -> [bold green]{len(found):>5}[/] proxies")
+
             except Exception as E:
                 logger.error(f"(gSources.single) Failed on `{u}`: {E.__class__.__name__} - {E}")
             
@@ -716,22 +775,31 @@ class NGFetcher:
         # Run all source fetches concurrently
         res = await asyncio.gather(*(single(u) for u in urls), return_exceptions=True)
         
-        unq: Dict[str, proxy] = {}
+        unq: Dict[tuple, proxy] = {}
         for sublist in res:
             if isinstance(sublist, Exception):
                 continue
             for p in sublist:
-                if p.ip not in unq:
-                    unq[p.ip] = p
+                key = (p.ip, p.port, p.proto)
+                if key not in unq:
+                    unq[key] = p
         
         logger.debug(f"(gSources) Identified {len(unq)} unique candidates from {len(urls)} sources")
-        
+
+        # Debugging: Log DB count before and after bUpsert
+        initial_db_count = (await self.db.statistics()).get('total', 0)
+        logger.debug(f"(gSources) DB total before bUpsert: {initial_db_count}")
+
         if not unq:
             logger.warning("(gSources) No valid candidates found")
             return []
         
         aCan = list(unq.values())
         await self.db.bUpsert(aCan)
+
+        final_db_count = (await self.db.statistics()).get('total', 0)
+        logger.debug(f"(gSources) DB total after bUpsert: {final_db_count}")
+        logger.debug(f"(gSources) Net change in DB: {final_db_count - initial_db_count}")
         return aCan
 
     async def _load_json_raw(self, source: str) -> Any:
@@ -853,16 +921,23 @@ class NGFetcher:
         logger.info(f"(run) Retrieved {len(test)} candidates from database...")
 
         # Update from web sources if requested or if DB is empty and no local JSON provided
-        if self.args.update_sources or (not test and not json_sources):
-            logger.info("(run) Fetching fresh sources from web...")
-            fresh = await self.gSources(sources, up=self.args.opsec)
+        if self.args.load_all or self.args.update_sources or (not test and not json_sources):
+            logger.info(f"(run) Fetching fresh sources from web (Mode: {'Load-All' if self.args.load_all else 'Update'})...")
+            fresh = await self.gSources(sources, up=(self.args.opsec or self.args.proxy_only))
+
+            if self.args.load_all:
+                stats = await self.db.statistics()
+                logger.info(f"(run) Load-all complete. Processed {len(fresh)} unique proxies from sources. Final total in database: {stats.get('total', 0)}")
+                await self.db.close()
+                return
+
             # Merge fresh candidates into test list
-            existing_ips = {p.ip for p in test}
+            existing_keys = {(p.ip, p.port, p.proto) for p in test}
             added = 0
             for p in fresh:
-                if p.ip not in existing_ips:
+                if (p.ip, p.port, p.proto) not in existing_keys:
                     test.append(p)
-                    existing_ips.add(p.ip)
+                    existing_keys.add((p.ip, p.port, p.proto))
                     added += 1
             if added > 0:
                 logger.info(f"(run) Added {added} fresh candidates from sources.")
@@ -874,16 +949,16 @@ class NGFetcher:
         for json_source in json_sources:
             try:
                 loaded_proxies = await self.load_json_proxies(json_source)
-                existing_ips = {p.ip for p in test}
+                existing_keys = {(p.ip, p.port, p.proto) for p in test}
                 added_count = 0
                 search_types = {t.lower() for t in self.args.type}
                 if "https" in search_types:
                     search_types.add("http")
 
                 for p in loaded_proxies:
-                    if p.proto.lower() in search_types and p.ip not in existing_ips:
+                    if p.proto.lower() in search_types and (p.ip, p.port, p.proto) not in existing_keys:
                         test.append(p)
-                        existing_ips.add(p.ip)
+                        existing_keys.add((p.ip, p.port, p.proto))
                         added_count += 1
 
                 logger.info(f"Added {added_count} proxies from JSON source `{json_source}` matching types {self.args.type}.")
@@ -1120,6 +1195,7 @@ async def main():
     # Sources
     parser.add_argument("--source", help="Custom proxy source URLs (comma-separated)")
     parser.add_argument("--update-sources", action="store_true", help="Force refresh of candidates from external URLs")
+    parser.add_argument("--load-all", action="store_true", help="Fetch and load all proxies from all sources into the database, display source statistics, and exit.")
     parser.add_argument("--skip-dead", action="store_true", help="Skip proxies marked as dead in the database")
     # Opsec
     parser.add_argument("--opsec", action="store_true", help="Enable stealth mode: route discovery and metadata audits through a pivot proxy")
