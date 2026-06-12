@@ -49,7 +49,6 @@ PROXY_SOURCES = {
         "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",
         "https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt",
         "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/socks5.txt",
-        "https://raw.githubusercontent.com/roosterkid/openproxylist/refs/heads/main/SOCKS5_RAW.txt"
     ],
     "socks4": [
         "https://raw.githubusercontent.com/iplocate/free-proxy-list/refs/heads/main/protocols/socks4.txt", # Updated every 30 mins
@@ -212,7 +211,7 @@ class database:
 
         try:
             await self.db.execute("PRAGMA busy_timeout = 5000")
-            await self.db.execute("PRAGMA synchronous = OFF")
+            await self.db.execute("PRAGMA synchronous = NORMAL")
             await self.db.execute("PRAGMA temp_store = MEMORY")
             await self.db.execute("PRAGMA mmap_size = 2147483648") # 2GB
             await self.db.execute("PRAGMA locking_mode = EXCLUSIVE")
@@ -434,17 +433,17 @@ class database:
                         INSERT INTO idx (ip,proto,port,working,latency,anonymity,country,city,isp,org,asn,leakDNS,verified,timeCheck,via)
                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         ON CONFLICT(ip, port, proto) DO UPDATE SET
-                            working = excluded.working,
-                            latency = excluded.latency,
-                            anonymity = excluded.anonymity,
-                            country = excluded.country,
-                            city = excluded.city,
-                            isp = excluded.isp,
-                            org = excluded.org,
-                            asn = excluded.asn,
-                            leakDNS = excluded.leakDNS,
-                            verified = excluded.verified,
-                            timeCheck = excluded.timeCheck,
+                            working = CASE WHEN excluded.verified = 1 THEN excluded.working ELSE idx.working END,
+                            verified = CASE WHEN excluded.verified = 1 THEN excluded.verified ELSE idx.verified END,
+                            latency = CASE WHEN excluded.verified = 1 THEN excluded.latency ELSE idx.latency END,
+                            anonymity = CASE WHEN excluded.verified = 1 THEN excluded.anonymity ELSE idx.anonymity END,
+                            country = CASE WHEN excluded.verified = 1 OR (excluded.country IS NOT NULL AND excluded.country != '??') THEN excluded.country ELSE idx.country END,
+                            city = CASE WHEN excluded.verified = 1 THEN excluded.city ELSE idx.city END,
+                            isp = CASE WHEN excluded.verified = 1 THEN excluded.isp ELSE idx.isp END,
+                            org = CASE WHEN excluded.verified = 1 THEN excluded.org ELSE idx.org END,
+                            asn = CASE WHEN excluded.verified = 1 THEN excluded.asn ELSE idx.asn END,
+                            leakDNS = CASE WHEN excluded.verified = 1 THEN excluded.leakDNS ELSE idx.leakDNS END,
+                            timeCheck = CASE WHEN excluded.verified = 1 THEN excluded.timeCheck ELSE idx.timeCheck END,
                             via = excluded.via
                         """, data)
                 await self.db.commit()
@@ -560,7 +559,7 @@ class NGFetcher:
             for t in sTypes: bsUrls.extend(PROXY_SOURCES.get(t,[])[:3])
             cans = await self.gSources(bsUrls)
             if cans:
-                logger.debug(f"(_etsPivot) Assessing {len(cans)} bootstrap candidates in parallel...")
+                logger.debug(f"(_estPivot) Assessing {len(cans)} bootstrap candidates in parallel...")
                 bTasks = [asyncio.create_task(attempt(p)) for p in cans[:20]]
                 for future in asyncio.as_completed(bTasks):
                     if await future:
@@ -996,7 +995,7 @@ class NGFetcher:
                                 await self._estPivot()
 
                         # Skip recently verified
-                        if p.verified and p.timeCheck:
+                        if p.working and p.verified and p.timeCheck:
                             try:
                                 lastTime = datetime.fromisoformat(p.timeCheck)
                                 if (datetime.now(timezone.utc) - lastTime).total_seconds() < 3600:
@@ -1101,7 +1100,7 @@ class NGFetcher:
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H-%M-%S UTC")
         chain_modes = {0: "dynamic_chain", 1: "random_chain", 2: "strict_chain"}
         chain_type = chain_modes.get(self.args.chain_type, "dynamic_chain")
-        cl = self.args.chain_length or self.args.limit
+        cl = self.args.chain_length or len(export_list)
         config_lines = [
             f"# NGF 0.1.5 | {ts} | Working(?): {str(len(self.working))}",
             "",
@@ -1264,10 +1263,6 @@ async def main():
                 CONSOLE.print(f"  - Working: {stats.get('working',0)}")
                 CONSOLE.print(f"  - By Protocol: {json.dumps(stats.get('by_protocol',{}),indent=2)}")
                 CONSOLE.print(f"  - By Country: {json.dumps(stats.get('by_country',{}),indent=2)}")
-                if stats.get('regions'):
-                    CONSOLE.print(f"  - Regional Breakdown:")
-                    for country, count in stats.get('regions', {}).items():
-                        CONSOLE.print(f"    - {country}: {count}")
             if args.db_dump:
                 res = await fetcher.db.qIndex(
                     ip=args.db_ip,
