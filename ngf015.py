@@ -681,7 +681,7 @@ class NGFetcher:
                     p.isp = data.get("isp",p.isp)
                     p.org = data.get("org",p.org)
                     p.asn = data.get("as",p.asn)
-                    logger.info(f"(checkProxy) Proxy `{p.ip}` is working! Detected IP: `{oip}` | Country: `{p.country}` | ISP: `{p.isp}` | Org: `{p.org}` | ASN: `{p.asn}` | Latency: {p.latency}s")
+                    logger.info(f"(checkProxy) [FOUND] `{oip}` | Country: `{p.country}` | ISP: `{p.isp}` | Org: `{p.org}` | ASN: `{p.asn}` | Latency: {p.latency}s")
                     # Anonymity assessment
                     if oip == p.ip: p.anonymity = "Elite"
                     elif self.hAddr and oip != self.hAddr: p.anonymity = "Anonymous"
@@ -715,7 +715,7 @@ class NGFetcher:
                 elif "(60)" in str(E): eStr += " (SSL certificate error)"
                 elif "proxy error" in str(E).lower(): eStr += " (Proxy error)"
                 elif "connection refused" in str(E).lower(): eStr += " (Connection refused by proxy)"
-                logger.error(f"(checkProxy) [{eStr}]: Validation failed for `{p.ip}`...")
+                if self.args.verbose: logger.error(f"(checkProxy) [{eStr}]: Validation failed for `{p.ip}`...")
                 if attempt < MAX_RETRIES:
                     await asyncio.sleep(0.5 * (attempt + 1))
                     continue
