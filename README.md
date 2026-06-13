@@ -21,8 +21,6 @@
 Author : J4ck3LSyN | Version: 0.1.5 | License: MIT | Authority: Chaos Foundry Security Division
 </p>
 
-> _Note:_ For now I will keep `ngf014` due to the massive amounts of `ingress` put into `ngf015`.
-> Only difference will be `ngf015` carries some more arguments (and better over-all handling)
 
 ---
 
@@ -63,7 +61,7 @@ Author : J4ck3LSyN | Version: 0.1.5 | License: MIT | Authority: Chaos Foundry Se
 # Debian
 sudo apt-get install proxychains-ng
 # Arch
-sudo apt-get install proxychains-ng
+sudo pacman -S proxychains-ng
 # Windows
 winget install proxychains-ng # Or proxychains4?
 ```
