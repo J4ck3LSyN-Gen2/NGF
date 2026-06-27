@@ -631,23 +631,16 @@ class NGFetcher:
         return False
 
 
-    async def get_pivot_url(self, wait_if_missing: bool = False) -> Optional[str]:
-        u = await self.pivot_mgr.get_pivot_url()
-        if u: return u
-        if wait_if_missing or (self.args.opsec and not self.host_address):
-            logger.debug("No prior pivot found. Mode: opsec={}, proxy_only={}, req_wait={}".format(
-                self.args.opsec, self.args.proxy_only, wait_if_missing))
-            if self.args.proxy_only or await self.establish_pivot_proxy():
-                return await self.pivot_mgr.get_pivot_url()
-        return None
-
     async def establish_pivot_proxy(self) -> bool:
         """Establish or rotate a pivot proxy with clear logging and better fallback logic."""
         async with self.p_est_lock:
             if await self.pivot_mgr.get_pivot_url():
                 logger.debug("Pivot already exists.")
                 return True
+
             logger.info("[←→] Establishing new pivot proxy...")
+
+            # Manual pivot from --pivot argument
             if self.args.pivot:
                 manual_urls = [u.strip() for u in self.args.pivot.split(",") if u.strip()]
                 logger.info(f"Testing {len(manual_urls)} manual pivot(s)...")
@@ -666,14 +659,24 @@ class NGFetcher:
                             continue
 
                         logger.info(f"Testing manual pivot: {man_p.short()}")
-                        if await self.perform_proxy_test(man_p, is_pivot=True, for_audit=True, update_db=False):
-                            await self.pivot_mgr.set_pivot(man_p)
-                            CONSOLE.print(f"[bold green]✓[/] Manual pivot established: {man_p.format_url()}")
-                            logger.info(f"✓ Manual pivot established: {man_p.format_url()}")
-                            return True
+                        try:
+                            success = await asyncio.wait_for(
+                                self.perform_proxy_test(man_p, is_pivot=True, for_audit=True, update_db=False),
+                                timeout=15.0
+                            )
+                            if success:
+                                await self.pivot_mgr.set_pivot(man_p)
+                                CONSOLE.print(f"[bold green]✓[/] Manual pivot established: {man_p.format_url()}")
+                                logger.info(f"✓ Manual pivot established: {man_p.format_url()}")
+                                return True
+                        except asyncio.TimeoutError:
+                            logger.warning(f"Manual pivot test timeout: {man_p.short()}")
+                        except Exception as e:
+                            logger.warning(f"Manual pivot failed: {url_str} - {e}")
                     except Exception as e:
-                        logger.warning(f"Manual pivot failed: {url_str} - {e}")
+                        logger.warning(f"Error parsing manual pivot {url_str}: {e}")
 
+            # Try recent DB candidates
             pivot_protocols = ["http", "https"] if self.args.pivot_http_only else self.args.type
             recent_seeds = await self.db.get_recent_working_candidates(
                 types=pivot_protocols, min_age_minutes=3
@@ -687,33 +690,214 @@ class NGFetcher:
                     continue
 
                 logger.debug(f"Testing DB seed: {pot_seed_pivot.short()}")
-                if await self.perform_proxy_test(pot_seed_pivot, is_pivot=True, for_audit=True, update_db=False):
-                    await self.pivot_mgr.set_pivot(pot_seed_pivot)
-                    logger.success(f"[✔] DB candidate promoted to pivot: {pot_seed_pivot.format_url()}")
-                    return True
-            
+                try:
+                    success = await asyncio.wait_for(
+                        self.perform_proxy_test(pot_seed_pivot, is_pivot=True, for_audit=True, update_db=False),
+                        timeout=15.0
+                    )
+                    if success:
+                        await self.pivot_mgr.set_pivot(pot_seed_pivot)
+                        logger.debug(f"[✔] DB candidate promoted to pivot: {pot_seed_pivot.format_url()}")
+                        return True
+                except asyncio.TimeoutError:
+                    logger.warning(f"Pivot test timeout for DB seed: {pot_seed_pivot.short()}")
+                    await self.pivot_mgr.blacklist_ip(pot_seed_pivot.ip, 180)
+                except Exception as e:
+                    logger.debug(f"DB seed test failed: {pot_seed_pivot.short()} - {e}")
+
+            # Bootstrap from sources if needed
             bootstrap_urls = []
             for p_type in pivot_protocols:
                 if p_type.lower() in self.config.get("SOURCE_URLS", {}):
                     urls = self.config["SOURCE_URLS"][p_type.lower()]
-                    bootstrap_urls.extend(u for u in urls[:2])  # Only first 2 per type
+                    bootstrap_urls.extend(u for u in urls[:2])
 
             if bootstrap_urls:
-                logger.info(f"Fetching bootstrap candidates from {len(bootstrap_urls)} sources (direct)...")
-                bootstrap_candidates = await self.fetch_sources_from_urls(
-                    urls=bootstrap_urls, using_pivot=False
-                )
-                
-                logger.info(f"Testing {min(20, len(bootstrap_candidates))} bootstrap candidates...")
-                for bp in bootstrap_candidates[:20]:
-                    if await self.pivot_mgr.is_blacklisted(bp.ip):
-                        continue
-                    if await self.perform_proxy_test(bp, is_pivot=True, for_audit=True, update_db=False):
-                        await self.pivot_mgr.set_pivot(bp)
-                        logger.success(f"[✔] Bootstrap pivot established: {bp.format_url()}")
-                        return True
+                logger.info(f"Fetching bootstrap candidates from {len(bootstrap_urls)} sources...")
+                try:
+                    bootstrap_candidates = await asyncio.wait_for(
+                        self.fetch_sources_from_urls(
+                            urls=bootstrap_urls, 
+                            using_pivot=False
+                        ),
+                        timeout=40.0
+                    )
+                    
+                    logger.info(f"Testing {min(20, len(bootstrap_candidates))} bootstrap candidates...")
+                    for bp in bootstrap_candidates[:20]:
+                        if await self.pivot_mgr.is_blacklisted(bp.ip):
+                            continue
+                        logger.debug(f"Testing bootstrap: {bp.short()}")
+                        try:
+                            success = await asyncio.wait_for(
+                                self.perform_proxy_test(bp, is_pivot=True, for_audit=True, update_db=False),
+                                timeout=15.0
+                            )
+                            if success:
+                                await self.pivot_mgr.set_pivot(bp)
+                                logger.success(f"[✔] Bootstrap pivot established: {bp.format_url()}")
+                                return True
+                        except asyncio.TimeoutError:
+                            logger.warning(f"Bootstrap pivot timeout: {bp.short()}")
+                        except Exception as e:
+                            logger.debug(f"Bootstrap test failed: {e}")
+                except asyncio.TimeoutError:
+                    logger.warning("Bootstrap source fetching timed out.")
+                except Exception as e:
+                    logger.error(f"Bootstrap failed: {e}")
 
             logger.error("[!] Failed to establish any pivot proxy.")
+            return False
+
+    async def get_pivot_url(self, wait_if_missing: bool = False) -> Optional[str]:
+        u = await self.pivot_mgr.get_pivot_url()
+        if u: return u
+        if wait_if_missing or (self.args.opsec and not self.host_address):
+            logger.debug("No prior pivot found. Mode: opsec={}, proxy_only={}, req_wait={}".format(
+                self.args.opsec, self.args.proxy_only, wait_if_missing))
+            if self.args.proxy_only or await self.establish_pivot_proxy():
+                return await self.pivot_mgr.get_pivot_url()
+        return None
+
+    async def perform_proxy_test(self, p: proxy, is_pivot: bool = False, for_audit: bool = False, update_db: bool = True) -> bool:
+        p_ip_during_check = p.ip
+        test_target = random.choice(self.config['VALIDATION_TARGETS'])
+        
+        # === OPSEC + PIVOT FIX ===
+        # When testing the pivot itself, we must test it DIRECTLY (no chaining)
+        if is_pivot:
+            proxy_to_use = p.format_url()
+            pivot_url_to_use = None
+        else:
+            pivot_url_to_use = await self.get_pivot_url(wait_if_missing=False)
+            proxy_to_use = pivot_url_to_use if pivot_url_to_use else p.format_url()
+        # ======================================
+
+        global _stats_reporter
+        if _stats_reporter and not is_pivot:
+            _stats_reporter.metrics["validations_sent"] += 1
+
+        async with self.concurrent_threads_sem:
+            try:
+                ua_check = random.choice(self.config["USER_AGENTS"])
+                
+                # Debug line
+                logger.debug(f"Testing {p.short()} | is_pivot={is_pivot} | routed_via_pivot={bool(pivot_url_to_use)}")
+
+                start_val_time = time.time()
+                async with self.verification_in_flight_sem:
+                    val_response = await self.v_session.get(
+                        test_target, 
+                        proxy=proxy_to_use,                    # ← Fixed
+                        headers={"User-Agent": ua_check}, 
+                        timeout=self.config['CONN']['TIMEOUT']
+                    )
+                latency_val = round(time.time() - start_val_time, 2)
+
+                if val_response.status_code == 200 and val_response.content:
+                    data = val_response.json()
+                    reported_ip = data.get("query") or data.get("ip") or data.get("origin", "")
+                    if reported_ip == p_ip_during_check:
+                        p.anonymity = "Elite"
+                    else:
+                        if self.host_address and reported_ip != self.host_address:
+                            p.anonymity = "Anonymous"
+                        else:
+                            p.anonymity = "Transparent"
+
+                    p.latency = latency_val
+                    p.working = True
+                    p.verified = True
+                    p.time_check = datetime.now(timezone.utc).isoformat()
+                    p.country = data.get("countryCode", p.country)
+                    p.city = data.get("city", p.city)
+                    p.isp = data.get("isp", p.isp)
+                    p.org = data.get("org", p.org)
+                    p.asn = data.get("as", p.asn)
+
+                    if _stats_reporter and not is_pivot:
+                        _stats_reporter.metrics["successful_validations"] += 1
+
+                    # Extra audit via pivot (only if not testing pivot itself)
+                    if not self.args.no_audit_via_pivot and pivot_url_to_use and not is_pivot:
+                        try:
+                            audit_url = f"http://ip-api.com/json/{p.ip}?fields=status,countryCode,city,isp,org,as"
+                            async with self.verification_in_flight_sem:
+                                audit_resp = await self.h_session.get(
+                                    audit_url, 
+                                    proxy=pivot_url_to_use, 
+                                    timeout=self.config['CONN']['TIMEOUT']
+                                )
+                            if _stats_reporter:
+                                _stats_reporter.metrics["network_requests"] += 1
+                            if audit_resp.status_code == 200 and audit_resp.content:
+                                audit_data = audit_resp.json()
+                                p.country = audit_data.get("countryCode", p.country)
+                                p.city = audit_data.get("city", p.city)
+                                p.isp = audit_data.get("isp", p.isp)
+                                p.org = audit_data.get("org", p.org)
+                                p.asn = audit_data.get("as", p.asn)
+                        except Exception:
+                            pass 
+
+                    # DNS Leak Check (skip if testing pivot)
+                    if not self.args.no_dns_leak_check and not is_pivot:
+                        try:
+                            dns_leak_start = time.time()
+                            async with self.verification_in_flight_sem:
+                                dns_resp = await self.v_session.get(
+                                    "http://edns.ip-api.com/json", 
+                                    proxy=proxy_to_use,          # ← Also fixed
+                                    timeout=8
+                                )
+                            if _stats_reporter:
+                                _stats_reporter.metrics["network_requests"] += 1
+                            if dns_resp.status_code == 200 and dns_resp.content:
+                                dns_data = dns_resp.json()
+                                dns_geo_block = dns_data.get("dns", {}).get("geo", "").upper() or "UNKNOWN"
+                                if dns_geo_block != "UNKNOWN":
+                                    if self.host_country_code and p.country != "??":
+                                        p.leak_dns = self.host_country_code in dns_geo_block and p.country != self.host_country_code
+                                        if p.leak_dns:
+                                            logger.warning(f"DNS leak detected for {p.ip}!")
+                                        p.dns_leak_test_latency = round(time.time() - dns_leak_start, 2)
+                        except Exception as e_dns:
+                            if _stats_reporter:
+                                _stats_reporter.metrics["network_errors"] += 1
+                    else:
+                        p.leak_dns = False
+                    
+                    if update_db:
+                        await self.db.upsert(p)
+                    return True
+                else:
+                    p.working, p.verified, p.time_check = False, False, datetime.now(timezone.utc).isoformat()
+                    if update_db:
+                        await self.db.upsert(p)
+                    if _stats_reporter and not is_pivot:
+                        _stats_reporter.metrics["failed_validations"] += 1
+                    
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout testing proxy {p.short()}")
+                if _stats_reporter:
+                    _stats_reporter.metrics["network_errors"] += 1
+            except Exception as e_main:
+                if _stats_reporter:
+                    _stats_reporter.metrics["network_errors"] += 1
+                logger.debug(f"Error testing {p.short()}: {e_main.__class__.__name__}")
+
+            # Final failure path
+            p.working = False
+            p.verified = False
+            p.latency = None
+            p.time_check = datetime.now(timezone.utc).isoformat()
+            p.anonymity = "Unknown"
+            p.country = "??"
+            p.city = "Unknown"
+            if update_db:
+                await self.db.upsert(p)
+            if _stats_reporter and not is_pivot:
+                _stats_reporter.metrics["failed_validations"] += 1
             return False
 
     async def check_pivot_health_and_rotate(self):
@@ -1059,6 +1243,11 @@ class NGFetcher:
 
 
     async def perform_proxy_test(self, p: proxy, is_pivot: bool = False, for_audit: bool = False, update_db: bool = True) -> bool:
+        if is_pivot:
+            pivot_url_to_use = None
+        else:
+            pivot_url_to_use = await self.get_pivot_url(wait_if_missing=False)
+        
         p_ip_during_check = p.ip
         test_target = random.choice(self.config['VALIDATION_TARGETS'])
         
@@ -1070,6 +1259,7 @@ class NGFetcher:
             try:
                 ua_check = random.choice(self.config["USER_AGENTS"])
                 pivot_url_to_use = await self.get_pivot_url(wait_if_missing=False)
+                logger.debug(f"Testing {p.short()} via pivot: [{bool(pivot_url_to_use)}]:{str(pivot_url_to_use) if pivot_url_to_use else "<null>"}")
                 if pivot_url_to_use and not is_pivot:
                     try:
                         pivot_obj = await self.pivot_mgr.get_pivot()
@@ -1080,9 +1270,10 @@ class NGFetcher:
 
                 start_val_time = time.time()
                 async with self.verification_in_flight_sem:
+                    proxy_to_use = pivot_url if (self.args.opsec or self.args.proxy_only) and not is_pivot else p.format_url()
                     val_response = await self.v_session.get(
                         test_target, 
-                        proxy=p.format_url(), 
+                        proxy=p.format_url() if is_pivot else (pivot_url_to_use or p.format_url()),
                         headers={"User-Agent": ua_check}, 
                         timeout=self.config['CONN']['TIMEOUT']
                     )
@@ -1937,7 +2128,7 @@ async def main():
         fetcher_instance = NGFetcher(args, config)
         loop = asyncio.get_running_loop()
 
-        if await fetcher_instance.handle_db_operations():  # or handle it before full init
+        if await fetcher_instance.handle_db_operations():
             return
         
         def signal_handler(sig):
