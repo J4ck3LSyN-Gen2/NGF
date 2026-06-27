@@ -18,8 +18,10 @@
 ---
 
 <p align="center">
-Author : J4ck3LSyN | Version: 0.1.5 | License: MIT | Authority: Chaos Foundry Security Division
+Author : J4ck3LSyN | Version: 0.1.6(5) | License: MIT | Authority: Chaos Foundry Security Division
 </p>
+
+> _Note:_ I am in progress of updating the README.md for version 0.1.6, you can use `python3 ngf016.py --help` for the different args.
 
 
 ---
