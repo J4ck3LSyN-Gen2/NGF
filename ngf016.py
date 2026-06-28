@@ -113,6 +113,9 @@ def apply_config(config:Dict[str,Any], args:argparse.Namespace):
     if args.limit != DEFAULT_CONFIG['CONN']['MAX_PROXY_LIMIT']: config['CONN']['MAX_PROXY_LIMIT'] = args.limit
     if args.pivot_limit_if_set != DEFAULT_CONFIG['CONN']['PIVOT_USAGE_LIMIT']: config['CONN']['PIVOT_USAGE_LIMIT'] = args.pivot_limit_if_set
     if hasattr(args, 'db_filepath') and args.db_filepath != DEFAULT_CONFIG['CONN']['DBPATH']: config['CONN']['DBPATH'] = args.db_filepath
+    if hasattr(args, 'db_json_export') and args.db_json_export:
+        config.setdefault('DB', {})['JSON_EXPORT'] = args.db_json_export
+    return config
     if args.type:
          if "SOURCE_URLS" not in config: config["SOURCE_URLS"] = DEFAULT_CONFIG["SOURCE_URLS"].copy()
          selected_sources = {"http": [], "https": [], "socks4": [], "socks5": []}
@@ -358,7 +361,7 @@ class database:
                 base_q += " AND country = ?"
                 params.append(value)
             elif key == 'latency_max':
-                base_q += " AND latency <= ?"
+                base_q += " AND (latency IS NULL OR latency <= ?)"
                 params.append(value)
             elif key == 'proto':
                 base_q += " AND proto = ?"
@@ -510,6 +513,107 @@ class database:
             except Exception as e_stats:
                logger.error(f"DB Statistics gathering failed: {e_stats}")
                return {"error": str(e_stats)}
+
+    async def export_to_json(self, output_path: str, **filters: Any) -> bool:
+        """Export filtered database contents to a JSON file."""
+        try:
+            results = await self.qIndex(**filters)
+            if not results:
+                logger.warning("No entries matched the export filters.")
+                return False
+            
+            pdata = [p.format_json() for p in results]
+            export = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "version": __version__,
+                "author": __author__,
+                "count": len(pdata),
+                "filters": {k: v for k, v in filters.items() if v is not None},
+                "index": pdata
+            }
+            
+            path = Path(output_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(export, indent=2, ensure_ascii=False))
+            logger.info(f"→ Exported {len(pdata)} proxies to `{path}`")
+            return True
+        except PermissionError:
+            logger.error(f"Permission denied writing to `{output_path}`")
+            return False
+        except Exception as e:
+            logger.error(f"DB JSON export failed: {e}")
+            return False
+
+    async def import_from_json(self, input_path: str) -> int:
+        """Import proxy metadata from a JSON file into the database.
+        
+        Supports formats:
+        - Plain list of proxy dicts
+        - Dict with 'index', 'proxies', or 'data' key
+        """
+        try:
+            path = Path(input_path)
+            if not path.exists():
+                logger.error(f"Import file not found: {input_path}")
+                return 0
+            
+            raw = json.loads(path.read_text(encoding='utf-8'))
+            
+            # Normalize: handle both list and dict-with-index formats
+            if isinstance(raw, list):
+                entries = raw
+            elif isinstance(raw, dict):
+                entries = (
+                    raw.get("index") 
+                    or raw.get("proxies") 
+                    or raw.get("data") 
+                    or raw.get("results")
+                    or []
+                )
+            else:
+                logger.error(f"Unexpected JSON structure in {input_path}")
+                return 0
+            
+            if not isinstance(entries, list):
+                entries = [entries]
+            
+            imported_proxies: List[proxy] = []
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                if not all(k in entry for k in ("ip", "port", "proto")):
+                    continue
+                try:
+                    p = proxy(
+                        entry["proto"],
+                        entry["ip"],
+                        int(entry["port"]),
+                        via=f"DB_IMPORT({input_path})"
+                    )
+                    # Restore metadata fields (using new attribute names for ngf016)
+                    p.country = entry.get("country", p.country)
+                    p.city = entry.get("city", p.city)
+                    p.isp = entry.get("isp", p.isp)
+                    p.org = entry.get("org", p.org)
+                    p.asn = entry.get("asn", p.asn)
+                    p.verified = bool(entry.get("verified", False))
+                    p.working = bool(entry.get("working", False))
+                    p.latency = entry.get("latency")
+                    p.time_check = entry.get("time_check") or entry.get("timeCheck")
+                    p.anonymity = entry.get("anonymity", "Unknown")
+                    p.leak_dns = bool(entry.get("leak_dns", False))
+                    imported_proxies.append(p)
+                except Exception as e:
+                    logger.warning(f"(import_from_json) Failed to parse entry: {e}")
+            
+            if imported_proxies:
+                await self.bUpsert(imported_proxies)
+                logger.info(f"✓ Imported {len(imported_proxies)} proxies from `{input_path}`")
+            
+            return len(imported_proxies)
+        except Exception as e:
+            logger.error(f"Import from JSON `{input_path}` failed: {e}")
+            return 0
 
     async def get_recent_working_candidates(self, types: List[str], min_age_minutes: int = 5) -> List[proxy]:
         cutoff_iso = (datetime.now(timezone.utc) - timedelta(minutes=min_age_minutes)).isoformat()
@@ -1153,6 +1257,87 @@ class NGFetcher:
         
         return to_validate
 
+    async def _load_json_raw(self, source: str) -> Any:
+        """Load JSON data from a local path or remote URL."""
+        if source.startswith(("http://", "https://")):
+            logger.info(f"Loading JSON from remote URL: {source}")
+            try:
+                async with self.network_gather_sem:
+                    pivot_url = None
+                    if self.args.opsec or self.args.proxy_only:
+                        pivot_url = await self.get_pivot_url(wait_if_missing=True)
+                    resp = await self.h_session.get(source, proxy=pivot_url, timeout=25)
+                    if resp.status_code != 200:
+                        raise ValueError(f"Remote JSON fetch failed with status {resp.status_code}")
+                    if _stats_reporter:
+                        _stats_reporter.metrics["network_requests"] += 1
+                    return json.loads(resp.text)
+            except Exception as e:
+                raise RuntimeError(f"Failed to load remote JSON from `{source}`: {e}")
+        
+        p_path = Path(source)
+        if not p_path.exists():
+            raise FileNotFoundError(f"JSON source not found: {source}")
+        try:
+            return json.loads(p_path.read_text(encoding='utf-8'))
+        except Exception as e:
+            raise RuntimeError(f"Failed to load JSON from `{source}`: {e}")
+
+    async def load_json_proxies(self, source: str) -> List[proxy]:
+        """Load and normalize proxy list from a JSON file or remote URL (plain .json only for remote)."""
+        raw = await self._load_json_raw(source)
+        proxies: List[proxy] = []
+        
+        entries: List[Dict] = []
+        if isinstance(raw, list):
+            entries = raw
+        elif isinstance(raw, dict):
+            entries = (
+                raw.get("index")
+                or raw.get("proxies")
+                or raw.get("data")
+                or raw.get("results")
+                or []
+            )
+        
+        if not isinstance(entries, list):
+            entries = [entries]
+        
+        seen = set()
+        for item in entries:
+            if not isinstance(item, dict):
+                continue
+            proto = str(item.get("proto", "")).lower()
+            ip = item.get("ip")
+            port = item.get("port")
+            if not proto or not ip or not port:
+                continue
+            try:
+                port = int(port)
+                if not (1 <= port <= 65535):
+                    continue
+            except (ValueError, TypeError):
+                continue
+            
+            # Deduplicate
+            key = (str(ip), port, proto)
+            if key in seen:
+                continue
+            seen.add(key)
+            
+            try:
+                p = proxy(proto, str(ip), port, via=f"JSON_LOAD({source})")
+                p.country = item.get("country", p.country)
+                p.city = item.get("city", p.city)
+                p.isp = item.get("isp", p.isp)
+                p.org = item.get("org", p.org)
+                p.anonymity = item.get("anonymity", p.anonymity)
+                proxies.append(p)
+            except ValueError:
+                continue
+        
+        logger.info(f"Loaded {len(proxies)} proxies from JSON source: {source}")
+        return proxies
 
     async def fetch_sources_from_urls(self, urls: List[str], using_pivot: bool) -> List[proxy]:
         regex_compiled = re.compile(IP_PORT_REGEX_PATTERN) 
@@ -1400,6 +1585,30 @@ class NGFetcher:
             bg_health_task.add_done_callback(bg_task_tracker.discard)
         else:
             await self.resolve_hosts_public_info()
+        json_sources_to_load = []
+        if getattr(self.args, 'json_remote_url', None):
+            json_sources_to_load.append(self.args.json_remote_url)
+        if getattr(self.args, 'update_json', None):
+            # In args, this would be a path; adjust attribute name as needed
+            json_sources_to_load.append(getattr(self.args, 'json_path', None))
+        if getattr(self.args, 'validate_json', None):
+            json_sources_to_load.append(getattr(self.args, 'json_path', None))
+
+        for json_src in json_sources_to_load:
+            if not json_src:
+                continue
+            try:
+                loaded = await self.load_json_proxies(json_src)
+                existing_keys = {(c.ip, c.port, c.proto) for c in candidates}
+                added = 0
+                for lp in loaded:
+                    if (lp.ip, lp.port, lp.proto) not in existing_keys:
+                        candidates.append(lp)
+                        existing_keys.add((lp.ip, lp.port, lp.proto))
+                        added += 1
+                logger.info(f"Added {added} proxies from JSON source `{json_src}`")
+            except Exception as e:
+                logger.error(f"Failed to load JSON source `{json_src}`: {e}")
         candidates = await self.find_candidate_proxies(
             types_needed=self.args.type, 
             apply_smart_filters=True
@@ -1665,8 +1874,10 @@ class NGFetcher:
                 "proxies": [p.format_json() for p in final_list]
             }
             json_path = base_dir / self.args.json_metadata_output
-            json_path.write_text(json.dumps(meta_out, indent=self.args.indent_json))
-            logger.info(f"→ Saved JSON metadata to {json_path}")
+            # Use the --indent-json argument (stored in args from parser)
+            indent_level = getattr(self.args, 'indent_json', 2)
+            json_path.write_text(json.dumps(meta_out, indent=indent_level))
+            logger.info(f"→ Saved JSON metadata to `{json_path}`")
         #> TXT
         if getattr(self.args, 'txt_output', None):
             txt_path = base_dir / self.args.txt_output
@@ -1692,52 +1903,101 @@ class NGFetcher:
             logger.warning("No output format specified. Use --proxychains-output, --clash-output, --txt-output, etc.")
 
     async def handle_db_operations(self) -> bool:
-        """Handle all --db-* commands. Returns True if a DB-only operation was performed."""
-        if not any([self.args.db_dump, self.args.db_count, self.args.db_clear,
-                    self.args.db_ip, self.args.db_country, self.args.db_proto,
-                    self.args.db_max_latency, self.args.db_anonymity, self.args.db_via]):
+        """
+        Handle all --db-* operations.
+        Returns True if a DB-only operation was performed (so main() can exit early).
+        """
+        # Check if any DB-related flag is active
+        if not any([
+            self.args.db_dump,
+            self.args.db_count,
+            self.args.db_clear,
+            self.args.db_ip,
+            self.args.db_country,
+            self.args.db_proto,
+            self.args.db_max_latency,
+            self.args.db_anonymity,
+            self.args.db_via,
+            getattr(self.args, 'db_import', None),
+            getattr(self.args, 'db_json_export', None),
+        ]):
             return False
 
+        logger.info("Database operation mode activated — skipping full scan.")
         await self.db.init()
 
+        performed_operation = False
+
+        #> Clear
         if self.args.db_clear:
             await self.db.clear()
-            logger.info("Database cleared successfully.")
-            await self.db.close()
-            return True
+            CONSOLE.print("[bold green]✓ Database successfully cleared.[/]")
+            performed_operation = True
 
-        if self.args.db_count or self.args.stats:
+        #> Stats
+        elif self.args.db_count or self.args.stats:
             stats = await self.db.statistics()
             table = Table(title="NGF Database Statistics")
-            table.add_column("Metric")
-            table.add_column("Value")
+            table.add_column("Metric", style="dim")
+            table.add_column("Value", justify="right", style="bold")
             for k, v in stats.items():
-                if isinstance(v, dict):
-                    table.add_row(k, str(v))
-                else:
-                    table.add_row(k, str(v))
+                table.add_row(k, str(v))
             CONSOLE.print(table)
-            await self.db.close()
-            return True
+            performed_operation = True
 
-        # Dump operation
-        if self.args.db_dump:
+        #> Import
+        elif getattr(self.args, 'db_import', None):
+            try:
+                count = await self.db.import_from_json(self.args.db_import)
+                CONSOLE.print(f"[bold green]✓ Imported {count} proxies from `{self.args.db_import}`[/]")
+            except Exception as e:
+                CONSOLE.print(f"[bold red]✗ Import failed: {e}[/]")
+            performed_operation = True
+
+        #> Export Json
+        elif getattr(self.args, 'db_json_export', None):
+            try:
+                filters = {
+                    'ip': self.args.db_ip,
+                    'country': self.args.db_country,
+                    'max_latency': getattr(self.args, 'db_max_latency', None),
+                    'proto': self.args.db_proto,
+                    'anonymity': self.args.db_anonymity,
+                    'via': self.args.db_via,
+                    'include_working': True,
+                    'include_dead': not getattr(self.args, 'skip_all_dead', False),
+                }
+                #> Clean filters
+                filters = {k: v for k, v in filters.items() if v is not None}
+
+                success = await self.db.export_to_json(self.args.db_json_export, **filters)
+                if success:
+                    CONSOLE.print(f"[bold green][✓] Database exported to `{self.args.db_json_export}`[/]")
+                else:
+                    CONSOLE.print("[yellow]No matching entries found or export failed.[/]")
+            except Exception as e:
+                CONSOLE.print(f"[bold red]✗ JSON export failed: {e}[/]")
+                logger.error(f"Export error: {e}")
+            performed_operation = True
+
+        # Dump (Table View)
+        elif self.args.db_dump:
             filters = {
                 'ip': self.args.db_ip,
                 'country': self.args.db_country,
-                'max_latency': self.args.db_max_latency,
+                'max_latency': getattr(self.args, 'db_max_latency', None),
                 'proto': self.args.db_proto,
                 'anonymity': self.args.db_anonymity,
                 'via': self.args.db_via,
                 'include_working': True,
-                'include_dead': not self.args.skip_all_dead
+                'include_dead': not getattr(self.args, 'skip_all_dead', False),
             }
-            results = await self.db.qIndex(**filters)
-            
+            results = await self.db.qIndex(**{k: v for k, v in filters.items() if v is not None})
+
             if not results:
-                logger.info("No proxies found matching filters.")
+                CONSOLE.print("[yellow]No proxies found matching the filters.[/]")
             else:
-                table = Table(title=f"NGF Database Dump ({len(results)} proxies)")
+                table = Table(title=f"NGF Database Dump — {len(results)} proxies")
                 table.add_column("Proto")
                 table.add_column("IP:Port")
                 table.add_column("Status")
@@ -1745,8 +2005,8 @@ class NGFetcher:
                 table.add_column("Anonymity")
                 table.add_column("Country")
                 table.add_column("Via")
-                
-                for p in results[:500]:  # Safety limit
+
+                for p in results[:1500]:  # safety cap
                     status = "✓" if p.working else "✗"
                     lat = f"{p.latency:.2f}s" if p.latency else "??"
                     table.add_row(
@@ -1754,17 +2014,15 @@ class NGFetcher:
                         f"{p.ip}:{p.port}",
                         status,
                         lat,
-                        p.anonymity[:10],
+                        p.anonymity,
                         p.country,
-                        p.via[:30] + "..." if len(p.via) > 30 else p.via
+                        p.via[:40] + "..." if len(p.via) > 40 else p.via
                     )
                 CONSOLE.print(table)
-            
-            await self.db.close()
-            return True
+            performed_operation = True
 
         await self.db.close()
-        return False
+        return performed_operation
 
 #>Init
 bg_task_tracker = set()
@@ -2016,6 +2274,13 @@ async def main():
                           help="Filter by anonymity (Elite/Anonymous/Transparent).")
     db_group.add_argument("--db-via", 
                           help="Filter by source (via).")
+    db_group.add_argument("--db-import", 
+                          help="Import proxy metadata from a JSON file into the database (format: list or {index: [...]})")
+    db_group.add_argument("--db-json", "--db-json-export",
+                          dest="db_json_export",
+                          metavar="FILE",
+                          help="Export filtered DB contents to JSON and exit (e.g. --db-json proxies.json)")
+    
 
     sources_group = parser.add_argument_group("Source & Tuning")
     sources_group.add_argument("--load-source-counts", action="store_true",
@@ -2126,10 +2391,10 @@ async def main():
     logger.warning("Free/unauthenticated proxies from public repositories are inherently risky. Use at your discretion.")
     try:
         fetcher_instance = NGFetcher(args, config)
-        loop = asyncio.get_running_loop()
-
         if await fetcher_instance.handle_db_operations():
+            logger.info("DB operation completed. Exiting.")
             return
+        loop = asyncio.get_running_loop()
         
         def signal_handler(sig):
             logger.info(f"Received signal {sig}. Shutting down...")
