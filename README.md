@@ -57,7 +57,7 @@ Author: J4ck3LSyN | Version: 0.1.6 | License: MIT | Authority: Chaos Foundry Sec
 *   **Persistent SQLite State (WAL Mode):** Uses a local database (`ngf_state.db`) with Write-Ahead Logging for high-concurrency performance. Includes specific PRAGMA optimizations (`busy_timeout=8000`, `mmap_size=2GB`, `cache_size=256MB`, `temp_store=MEMORY`) for stability on shared filesystems (WSL/NFS) and index-driven queries for rapid metadata filtering across every key field.
 *   **Stealth Pivot Mechanism:** Implements a multi-stage "Phase 0" bootstrap that prioritizes manual pivots → high-reliability database seeds → fresh source bootstrap. Includes automatic health monitoring, usage-limit rotation, and IP blacklisting to ensure a secure gateway is established before any third-party API is contacted.
 *   **Advanced TLS Impersonation:** Utilizes `curl_cffi` to impersonate a **Chrome 110** browser fingerprint. This bypasses modern anti-bot and CDN-level protections (Cloudflare, Akamai, etc.) that typically block standard Python `requests` or `httpx` headers.
-*   **Asynchronous Pipeline:** Leverages `asyncio` with semaphores for granular concurrency control — separate pools for validation workers (`CONCURRENCY_LIMIT`), network gathering (`NETWORK_CONCURRENCY_LIMIT`), and in-flight verification requests (`verification_in_flight_sem=30`).
+*   **Asynchronous Pipeline:** Leverages `asyncio` with semaphores for granular concurrency control - separate pools for validation workers (`CONCURRENCY_LIMIT`), network gathering (`NETWORK_CONCURRENCY_LIMIT`), and in-flight verification requests (`verification_in_flight_sem=30`).
 *   **Deep Metadata Validation:**
     *   **Anonymity Detection:** Elite, Anonymous, and Transparent classification based on IP comparison.
     *   **Remote DNS (SOCKS5h):** Automatically uses `socks5h://` for SOCKS5 proxies to ensure DNS resolution happens at the proxy level, preventing local DNS leaks.
@@ -73,7 +73,7 @@ Author: J4ck3LSyN | Version: 0.1.6 | License: MIT | Authority: Chaos Foundry Sec
 
 ## Changelog (v0.1.6)
 
-*   **Major Overhaul — Output Pipeline**
+*   **Major Overhaul - Output Pipeline**
     - Added **Clash Meta** configuration export (`--clash-output`): Generates a ready-to-use `clash.yaml` with proxies, proxy-groups, and routing rules.
     - Added **sing-box** configuration export (`--sing-box-output`): Generates a complete sing-box JSON config with inbounds, outbounds, and routing.
     - Added **simple TXT list** export (`--txt-output`): One proxy per line (`proto://ip:port`).
@@ -277,7 +277,7 @@ python3 ngf.py --type socks5 --limit 100 \
     - _Usage: `python3 ngf.py ... --chain-max-latency 5.0 ...`_
 
 *   **Elite Filter (`--filter-elite-only`)**
-    Only export proxies classified as "Elite" (highest anonymity — server IP is the only visible IP).
+    Only export proxies classified as "Elite" (highest anonymity - server IP is the only visible IP).
     - _Usage: `python3 ngf.py ... --filter-elite-only ...`_
 
 *   **Append Tor (`--append-tor`)**
@@ -560,12 +560,12 @@ NGF utilizes a persistent SQLite engine to maintain a "Long-Term Memory" of the 
 *   **Persistent Reliability:** Proxies identified as "Working" are prioritized in subsequent runs as bootstrap seeds, enabling sub-second startup.
 *   **Async Concurrency:** Built on `aiosqlite`; database operations never block the network validation pipeline.
 *   **Performance Optimized:**
-    - `PRAGMA busy_timeout = 8000` — Handles database locks gracefully during high-concurrency writes.
-    - `PRAGMA synchronous = NORMAL` — Balances safety and speed.
-    - `PRAGMA temp_store = MEMORY` — Temp tables in RAM for speed.
-    - `PRAGMA mmap_size = 2147483648` — 2GB memory-mapped I/O for fast reads.
-    - `PRAGMA cache_size = -256000` — 256MB page cache.
-    - `PRAGMA journal_mode = WAL` — Write-Ahead Logging for concurrent read/write.
+    - `PRAGMA busy_timeout = 8000` - Handles database locks gracefully during high-concurrency writes.
+    - `PRAGMA synchronous = NORMAL` - Balances safety and speed.
+    - `PRAGMA temp_store = MEMORY` - Temp tables in RAM for speed.
+    - `PRAGMA mmap_size = 2147483648` - 2GB memory-mapped I/O for fast reads.
+    - `PRAGMA cache_size = -256000` - 256MB page cache.
+    - `PRAGMA journal_mode = WAL` - Write-Ahead Logging for concurrent read/write.
 *   **Batch Upserting:** Proxy results are inserted in configurable batches (default 500) with `BEGIN IMMEDIATE` transactions to minimize disk I/O.
 *   **Index-Driven Queries:** Every key field is indexed for near-instant filtering:
     - `idx_working_main`, `idx_country_main`, `idx_latency_main`, `idx_anonymity_main`, `idx_proto_main`, `idx_time_check_main`, `idx_via_main`
@@ -696,18 +696,18 @@ Each proxy progresses through the following stages:
 
 NGF's OpSec architecture is divided into three distinct phases:
 
-### Phase 0 — Bootstrap
+### Phase 0 - Bootstrap
 NGF searches for a "Pivot" proxy in this priority order:
 1. **Manual pivot** specified via `--pivot`
-2. **Database seeds** — recently validated working proxies from previous runs
-3. **Fresh bootstrap** — small subset of newly fetched source candidates
+2. **Database seeds** - recently validated working proxies from previous runs
+3. **Fresh bootstrap** - small subset of newly fetched source candidates
 
 Once a working pivot is found, it is locked as the active gateway.
 
-### Phase 1 — Proxied Discovery
+### Phase 1 - Proxied Discovery
 All source URL fetches are routed through the pivot proxy using TLS impersonation. Third-party list providers see the pivot IP, not the host.
 
-### Phase 2 — Proxied Audit
+### Phase 2 - Proxied Audit
 Candidate proxies are audited via the pivot using `ip-api.com`. This verifies geolocation, ISP, and ASN metadata before the host IP ever touches the candidate.
 
 ```text
@@ -788,16 +788,16 @@ Candidate proxies are audited via the pivot using `ip-api.com`. This verifies ge
 ### Technical Changes
 
 #### 0.1.6
-1. **Complete output pipeline overhaul** — Added Clash Meta, sing-box, dedicated proxychains, and TXT export formats.
-2. **PivotManager class** — Extracted pivot logic into dedicated class with TTL blacklisting, usage tracking, and health monitoring.
-3. **Proxy dataclass** — Structured proxy representation with built-in validation and formatting methods.
-4. **Remote JSON ingestion** — Load `.json`, `.gz`, `.tar.gz` from URLs with flexible schema detection.
-5. **Instructions file mode** — Non-interactive execution via YAML/JSON instruction files.
-6. **Configuration file support** — Deep-merging JSON/YAML configs with CLI override.
-7. **Database optimizations** — Index on every key column, batch upserts with `BEGIN IMMEDIATE`, improved PRAGMA settings.
-8. **StatsReporter** — Runtime metrics collection with Rich table output.
-9. **DNS leak detection fix** — Uses `edns.ip-api.com` with pivot-aware routing.
-10. **Validation routing fix** — Correctly separates pivot testing (direct) from candidate testing (via pivot).
+1. **Complete output pipeline overhaul** - Added Clash Meta, sing-box, dedicated proxychains, and TXT export formats.
+2. **PivotManager class** - Extracted pivot logic into dedicated class with TTL blacklisting, usage tracking, and health monitoring.
+3. **Proxy dataclass** - Structured proxy representation with built-in validation and formatting methods.
+4. **Remote JSON ingestion** - Load `.json`, `.gz`, `.tar.gz` from URLs with flexible schema detection.
+5. **Instructions file mode** - Non-interactive execution via YAML/JSON instruction files.
+6. **Configuration file support** - Deep-merging JSON/YAML configs with CLI override.
+7. **Database optimizations** - Index on every key column, batch upserts with `BEGIN IMMEDIATE`, improved PRAGMA settings.
+8. **StatsReporter** - Runtime metrics collection with Rich table output.
+9. **DNS leak detection fix** - Uses `edns.ip-api.com` with pivot-aware routing.
+10. **Validation routing fix** - Correctly separates pivot testing (direct) from candidate testing (via pivot).
 
 #### 0.1.5
 - Comprehensive signal handling & graceful shutdown overhaul.
