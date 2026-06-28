@@ -821,5 +821,5 @@ Using free public proxies involves inherent risks. These servers are often monit
 
 <p align="center">
   <strong>Built with ❤️ by <a href="https://github.com/J4ck3LSyN-Gen2">J4ck3LSyN</a> | Chaos Foundry Security Division</strong><br>
-  <sub>MIT License | Copyright © 2024</sub>
+  <sub>MIT License | Copyright © 2026</sub>
 </p>
